@@ -1,0 +1,224 @@
+/* ===========================
+   Guardian Theme
+   =========================== */
+
+QMainWindow {
+    background: #101418;
+}
+
+QWidget {
+    background: #101418;
+    color: white;
+    font-family: "Segoe UI";
+    font-size: 11pt;
+}
+
+/* ===========================
+   Sidebar
+   =========================== */
+
+QListWidget {
+    background: #171C22;
+    border: none;
+    outline: none;
+    padding: 8px;
+}
+
+QListWidget::item {
+    padding: 12px;
+    border-radius: 8px;
+}
+
+QListWidget::item:hover {
+    background: #2B333D;
+}
+
+QListWidget::item:selected {
+    background: #30D158;
+    color: black;
+}
+
+/* ===========================
+   Buttons
+   =========================== */
+
+QPushButton {
+    background: #30D158;
+    color: black;
+    border: none;
+    border-radius: 8px;
+    padding: 10px;
+    min-height: 42px;
+    font-weight: bold;
+}
+
+QPushButton:hover {
+    background: #4CFF82;
+}
+
+QPushButton:pressed {
+    background: #24B84A;
+}
+
+/* ===========================
+   Cards
+   =========================== */
+
+QFrame {
+    background: #20262D;
+    border: 1px solid #2F3844;
+    border-radius: 12px;
+    padding: 10px;
+}
+
+/* ===========================
+   Labels
+   =========================== */
+
+QLabel#title {
+    font-size: 24px;
+    font-weight: bold;
+    color: white;
+}
+
+QLabel#subtitle {
+    color: #B8BDC4;
+}
+
+/* ===========================
+   Progress Bar
+   =========================== */
+
+QProgressBar {
+    border: 1px solid #2F3844;
+    border-radius: 8px;
+    background: #171C22;
+    text-align: center;
+}
+
+QProgressBar::chunk {
+    background: #30D158;
+    border-radius: 6px;
+}
+
+/* ===========================
+   Tables
+   =========================== */
+
+QTableWidget {
+    background: #20262D;
+    border: none;
+    gridline-color: #2F3844;
+    selection-background-color: #30D158;
+    selection-color: black;
+}
+
+QHeaderView::section {
+    background: #171C22;
+    color: white;
+    border: none;
+    padding: 8px;
+    font-weight: bold;
+}
+
+/* ===========================
+   Scroll Bars
+   =========================== */
+
+QScrollBar:vertical {
+    background: #171C22;
+    width: 12px;
+    border: none;
+}
+
+QScrollBar::handle:vertical {
+    background: #2F3844;
+    border-radius: 6px;
+    min-height: 25px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #30D158;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical,
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+    border: none;
+}
+
+QScrollBar:horizontal {
+    background: #171C22;
+    height: 12px;
+    border: none;
+}
+
+QScrollBar::handle:horizontal {
+    background: #2F3844;
+    border-radius: 6px;
+    min-width: 25px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #30D158;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal,
+QScrollBar::add-page:horizontal,
+QScrollBar::sub-page:horizontal {
+    background: none;
+    border: none;
+}
+
+/* Modern cards */
+
+QFrame#card {
+    background: #1B222B;
+    border: 1px solid #2E3742;
+    border-radius: 14px;
+    padding: 14px;
+}
+
+QFrame#card:hover {
+    border: 1px solid #30D158;
+}
+
+QLabel#cardTitle {
+    color: #AEB6BF;
+    font-size: 13px;
+}
+
+QLabel#cardValue {
+    font-size: 34px;
+    font-weight: bold;
+    color: white;
+}
+
+QLabel#status {
+    color: #30D158;
+    font-size: 26px;
+    font-weight: bold;
+}
+
+QLineEdit {
+    background: #1B222B;
+    border: 1px solid #2F3844;
+    border-radius: 8px;
+    padding: 8px;
+}
+
+QLineEdit:focus {
+    border: 1px solid #30D158;
+}
+
+QTableWidget {
+    alternate-background-color: #171C22;
+}
+
+QTableWidget::item:selected {
+    background: #30D158;
+    color: black;
+}
