@@ -36,7 +36,7 @@ class DashboardPage(QWidget):
         title = QLabel("Guardian Antivirus")
         title.setObjectName("title")
 
-        subtitle = QLabel("Your computer is protected")
+        subtitle = QLabel("Scan files and review protection activity")
         subtitle.setObjectName("subtitle")
 
         layout.addWidget(title)
@@ -107,7 +107,11 @@ class DashboardPage(QWidget):
 
     def start_scan(self, scan_function):
 
-        self.progress.setValue(0)
+        if self.scan_manager.thread and self.scan_manager.thread.isRunning():
+            return
+        self.scan_errors = []
+        self.buttons.setEnabled(False)
+        self.progress.setRange(0, 0)
         self.current_file.setText("Preparing scan...")
 
         if hasattr(self.window(), "tray"):
@@ -118,6 +122,7 @@ class DashboardPage(QWidget):
             maximum_callback=self.progress.setMaximum,
             current_file_callback=self.current_file.setText,
             finished_callback=self.scan_finished,
+            error_callback=self.scan_error,
         )
 
     def quick_scan(self):
@@ -140,32 +145,23 @@ class DashboardPage(QWidget):
         if not folder:
             return
 
-        self.progress.setValue(0)
+        self.start_scan(lambda **kwargs: self.scan_manager.custom_scan(folder, **kwargs))
 
-        self.current_file.setText(
-            "Preparing custom scan..."
-        )
-
-        if hasattr(self.window(), "tray"):
-            self.window().tray.set_scanning()
-
-        self.scan_manager.custom_scan(
-            folder,
-            progress_callback=self.update_progress,
-            maximum_callback=self.progress.setMaximum,
-            current_file_callback=self.current_file.setText,
-            finished_callback=self.scan_finished,
-        )
+    def scan_error(self, message):
+        self.scan_errors.append(message)
 
     def update_progress(self, scanned):
 
         self.progress.setValue(scanned)
 
-        self.files_card.set_value(scanned)
+        # The counter remains the lifetime database total until refresh.
 
     def scan_finished(self, scanned):
 
-        self.current_file.setText("✅ Scan complete")
+        self.buttons.setEnabled(True)
+        self.progress.setRange(0, max(scanned, 1))
+        self.progress.setValue(scanned)
+        self.current_file.setText("Scan finished with errors" if self.scan_errors else "Scan complete")
 
         self.protection.last_scan.setText(
             "Last Scan: " +
@@ -173,12 +169,12 @@ class DashboardPage(QWidget):
         )
 
         if hasattr(self.window(), "tray"):
-            self.window().tray.set_protected()
+            self.window().refresh_protection()
 
         self.refresh_dashboard()
 
         QMessageBox.information(
             self,
             "Guardian",
-            f"Scan complete.\n\nFiles scanned: {scanned}"
+            f"Files processed: {scanned}\nErrors: {len(self.scan_errors)}\n" + "\n".join(self.scan_errors[:3])
         )

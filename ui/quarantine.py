@@ -1,5 +1,5 @@
 from pathlib import Path
-import shutil
+from core.quarantine import QuarantineManager
 
 from PySide6.QtWidgets import (
     QWidget,
@@ -27,6 +27,8 @@ class QuarantinePage(QWidget):
         title.setObjectName("title")
 
         self.table = QTableWidget()
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels([
             "ID",
@@ -83,91 +85,22 @@ class QuarantinePage(QWidget):
             )
             return
 
-        quarantine_path = Path(
-            self.table.item(row, 3).text()
-        )
-
-        original_path = Path(
-            self.table.item(row, 2).text()
-        )
-
-        quarantine_id = int(
-            self.table.item(row, 0).text()
-        )
-
+        if QMessageBox.question(self, "Restore file", "Restore this potentially infected file? Monitoring may quarantine it again.") != QMessageBox.StandardButton.Yes:
+            return
         try:
-
-            original_path.parent.mkdir(
-                parents=True,
-                exist_ok=True
-            )
-
-            shutil.move(
-                quarantine_path,
-                original_path
-            )
-
-            self.db.delete_quarantine(
-                quarantine_id
-            )
-
-            QMessageBox.information(
-                self,
-                "Guardian",
-                "File restored successfully."
-            )
-
-        except Exception as e:
-
-            QMessageBox.critical(
-                self,
-                "Guardian",
-                str(e)
-            )
-
+            QuarantineManager().restore(int(self.table.item(row, 0).text()))
+        except Exception as exc:
+            QMessageBox.critical(self, "Restore failed", str(exc))
         self.refresh()
 
     def delete_file(self):
-
         row = self.table.currentRow()
-
         if row < 0:
-            QMessageBox.warning(
-                self,
-                "Guardian",
-                "Please select a file."
-            )
             return
-
-        quarantine_path = Path(
-            self.table.item(row, 3).text()
-        )
-
-        quarantine_id = int(
-            self.table.item(row, 0).text()
-        )
-
+        if QMessageBox.question(self, "Delete file", "Permanently delete the selected quarantined file?") != QMessageBox.StandardButton.Yes:
+            return
         try:
-
-            if quarantine_path.exists():
-                quarantine_path.unlink()
-
-            self.db.delete_quarantine(
-                quarantine_id
-            )
-
-            QMessageBox.information(
-                self,
-                "Guardian",
-                "File deleted permanently."
-            )
-
-        except Exception as e:
-
-            QMessageBox.critical(
-                self,
-                "Guardian",
-                str(e)
-            )
-
+            QuarantineManager().delete(int(self.table.item(row, 0).text()))
+        except Exception as exc:
+            QMessageBox.critical(self, "Delete failed", str(exc))
         self.refresh()

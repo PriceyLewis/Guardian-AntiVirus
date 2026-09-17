@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon,
 )
 from PySide6.QtGui import QAction, QIcon
+from core.paths import ROOT
 
 
 class GuardianTray(QSystemTrayIcon):
@@ -14,12 +15,13 @@ class GuardianTray(QSystemTrayIcon):
         self.window = window
 
         # Use Guardian icon
-        self.setIcon(QIcon("assets/icons/guardian.png"))
+        self.setIcon(QIcon(str(ROOT / "assets/icons/Guardian.png")))
         self.setToolTip("Guardian Antivirus")
 
         menu = QMenu()
+        self.menu = menu
 
-        self.status_action = QAction("🟢 Protected")
+        self.status_action = QAction("Protection not verified")
         self.status_action.setEnabled(False)
 
         open_action = QAction("Open Guardian")

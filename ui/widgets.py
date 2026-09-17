@@ -52,11 +52,11 @@ class ProtectionCard(Card):
         title = QLabel("Protection Status")
         title.setObjectName("title")
 
-        self.status = QLabel("🟢 Protected")
+        self.status = QLabel("Protection not verified")
         self.status.setObjectName("status")
 
-        self.realtime = QLabel("Real-Time Protection     Enabled")
-        self.definitions = QLabel("Virus Definitions        Up to Date")
+        self.realtime = QLabel("Real-Time Protection     Checking")
+        self.definitions = QLabel("Virus Definitions        Managed by ClamAV; freshness not verified")
         self.last_scan = QLabel("Last Scan                Never")
 
         for label in (
@@ -84,7 +84,7 @@ class ScanButtonPanel(Card):
         layout.setSpacing(15)
 
         self.quick = QPushButton("Quick Scan")
-        self.full = QPushButton("Full Scan")
+        self.full = QPushButton("Home Scan")
         self.custom = QPushButton("Custom Scan")
 
         layout.addWidget(self.quick)

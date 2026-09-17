@@ -6,9 +6,13 @@ from PySide6.QtWidgets import (
 )
 
 from config import load_config, save_config
+from core.startup import set_startup
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QMessageBox
 
 
 class SettingsPage(QWidget):
+    changed = Signal(dict)
 
     def __init__(self):
         super().__init__()
@@ -65,4 +69,10 @@ class SettingsPage(QWidget):
             "startup": self.startup.isChecked(),
         }
 
-        save_config(settings)
+        try:
+            set_startup(settings["startup"])
+            save_config(settings)
+        except OSError as exc:
+            QMessageBox.critical(self, "Settings could not be saved", str(exc))
+            return
+        self.changed.emit(settings)

@@ -74,7 +74,7 @@ class HistoryPage(QWidget):
 
         self.rows = self.db.recent_scans(500)
 
-        self.populate_table(self.rows)
+        self.filter_table()
 
     def populate_table(self, rows):
 

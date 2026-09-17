@@ -64,7 +64,7 @@ QPushButton:pressed {
    Cards
    =========================== */
 
-QFrame {
+QFrame#card {
     background: #20262D;
     border: 1px solid #2F3844;
     border-radius: 12px;
@@ -198,8 +198,8 @@ QLabel#cardValue {
 }
 
 QLabel#status {
-    color: #30D158;
-    font-size: 26px;
+    color: #FFCC66;
+    font-size: 22px;
     font-weight: bold;
 }
 
@@ -222,3 +222,6 @@ QTableWidget::item:selected {
     background: #30D158;
     color: black;
 }
+
+QLabel { background: transparent; border: none; padding: 0; }
+QPushButton:disabled { background: #39424E; color: #AEB6BF; }

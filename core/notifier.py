@@ -1,39 +1,16 @@
-import json
 import subprocess
-from pathlib import Path
-
-
-CONFIG = Path("config.json")
+from config import load_config
 
 
 class GuardianNotifier:
-
     @staticmethod
     def notifications_enabled():
-
-        if not CONFIG.exists():
-            return True
-
-        try:
-            with open(CONFIG) as f:
-                settings = json.load(f)
-
-            return settings.get("notifications", True)
-
-        except Exception:
-            return True
+        return load_config()["notifications"]
 
     @staticmethod
     def notify(title, message):
-
-        if not GuardianNotifier.notifications_enabled():
-            return
-
-        subprocess.run(
-            [
-                "notify-send",
-                title,
-                message,
-            ],
-            check=False,
-        )
+        if GuardianNotifier.notifications_enabled():
+            try:
+                subprocess.run(["notify-send", "--", title, message], check=False, timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass

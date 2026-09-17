@@ -1,4 +1,8 @@
 from PySide6.QtGui import QCloseEvent
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QSystemTrayIcon
+from config import load_config
+from core.watcher import Watcher
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -6,6 +10,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QStackedWidget,
+    QScrollArea,
     QWidget,
 )
 
@@ -36,7 +41,7 @@ class MainWindow(QMainWindow):
         pages = [
             "Dashboard",
             "Quick Scan",
-            "Full Scan",
+            "Home Scan",
             "History",
             "Quarantine",
             "Settings"
@@ -56,16 +61,70 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(SettingsPage())
 
         self.sidebar.currentRowChanged.connect(
-            self.stack.setCurrentIndex
+            self.navigate
         )
 
+        self.watcher = Watcher()
+        self.watcher_error = None
+        self.stack.widget(5).changed.connect(self.apply_settings)
+        self.apply_settings(load_config())
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.refresh_protection)
+        self.timer.start(3000)
         self.sidebar.setCurrentRow(0)
 
         layout.addWidget(self.sidebar)
-        layout.addWidget(self.stack, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.stack)
+        layout.addWidget(scroll, 1)
+
+    def navigate(self, row):
+        if row in (1, 2):
+            self.sidebar.setCurrentRow(0)
+            dashboard = self.stack.widget(0)
+            (dashboard.quick_scan if row == 1 else dashboard.full_scan)()
+            return
+        self.stack.setCurrentIndex(row)
+        page = self.stack.widget(row)
+        if hasattr(page, "refresh"):
+            page.refresh()
+        if row == 0:
+            page.refresh_dashboard()
+
+    def apply_settings(self, settings):
+        try:
+            if settings["realtime"]:
+                self.watcher.start()
+            else:
+                self.watcher.stop()
+            self.watcher_error = None
+        except Exception as exc:
+            self.watcher_error = str(exc)
+        self.refresh_protection()
+
+    def refresh_protection(self):
+        active = self.watcher.observer and self.watcher.observer.is_alive()
+        error = self.watcher_error or (self.watcher.handler.last_error if self.watcher.handler else None)
+        status = "Monitoring selected folders; engine not verified" if active else "Real-time monitoring off"
+        if error:
+            status = "Protection needs attention: " + str(error)
+        card = self.stack.widget(0).protection
+        card.status.setText(status)
+        card.status.setWordWrap(True)
+        card.realtime.setText("Real-Time Monitoring: " + ("Running" if active else "Off"))
+        if hasattr(self, "tray"):
+            self.tray.status_action.setText(status)
+
+    def shutdown(self):
+        self.timer.stop()
+        self.watcher.stop()
+        self.stack.widget(0).scan_manager.shutdown()
+        for row in (0, 3, 4):
+            self.stack.widget(row).db.close()
 
     def closeEvent(self, event: QCloseEvent):
-        if self.allow_close:
+        if self.allow_close or not QSystemTrayIcon.isSystemTrayAvailable():
             event.accept()
         else:
             self.hide()
