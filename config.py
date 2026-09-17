@@ -1,34 +1,30 @@
 import json
-from pathlib import Path
+import os
+import tempfile
+from core.paths import DATA
 
-CONFIG = Path("config.json")
+CONFIG = DATA / "config.json"
+DEFAULTS = {"realtime": True, "notifications": True, "archives": True, "startup": False, "close_to_tray": True}
 
 
 def load_config():
-
-    defaults = {
-        "realtime": True,
-        "notifications": True,
-        "archives": True,
-        "startup": False,
-    }
-
-    if not CONFIG.exists():
-        save_config(defaults)
-        return defaults
-
+    settings = DEFAULTS.copy()
     try:
-        with open(CONFIG) as f:
-            data = json.load(f)
-
-        defaults.update(data)
-        return defaults
-
-    except Exception:
-        return defaults
+        data = json.loads(CONFIG.read_text())
+        if isinstance(data, dict):
+            settings.update({k: v for k, v in data.items() if k in settings and type(v) is bool})
+    except (OSError, ValueError):
+        pass
+    return settings
 
 
 def save_config(config):
-
-    with open(CONFIG, "w") as f:
-        json.dump(config, f, indent=4)
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=CONFIG.parent, prefix=".config-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(config, f, indent=4)
+        os.replace(name, CONFIG)
+    finally:
+        if os.path.exists(name):
+            os.unlink(name)

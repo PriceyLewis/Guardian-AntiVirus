@@ -50,14 +50,14 @@ class ProtectionCard(Card):
         layout = QVBoxLayout(self)
 
         title = QLabel("Protection Status")
-        title.setObjectName("title")
+        title.setObjectName("sectionTitle")
 
-        self.status = QLabel("🟢 Protected")
+        self.status = QLabel("Checking monitoring status")
         self.status.setObjectName("status")
 
-        self.realtime = QLabel("Real-Time Protection     Enabled")
-        self.definitions = QLabel("Virus Definitions        Up to Date")
-        self.last_scan = QLabel("Last Scan                Never")
+        self.realtime = QLabel("Real-Time Protection     Checking")
+        self.definitions = QLabel("ClamAV definitions: managed by your system. Check engine details in Settings.")
+        self.last_scan = QLabel("No scan completed in this session")
 
         for label in (
             self.realtime,
@@ -84,7 +84,7 @@ class ScanButtonPanel(Card):
         layout.setSpacing(15)
 
         self.quick = QPushButton("Quick Scan")
-        self.full = QPushButton("Full Scan")
+        self.full = QPushButton("Home Scan")
         self.custom = QPushButton("Custom Scan")
 
         layout.addWidget(self.quick)
@@ -102,12 +102,14 @@ class RecentActivityCard(Card):
         header = QHBoxLayout()
 
         title = QLabel("Recent Activity")
-        title.setObjectName("title")
+        title.setObjectName("sectionTitle")
 
         header.addWidget(title)
         header.addStretch()
 
         self.list = QListWidget()
+        self.list.setMinimumHeight(120)
+        self.list.setMaximumHeight(165)
 
         layout.addLayout(header)
         layout.addWidget(self.list)
@@ -132,3 +134,4 @@ class RecentActivityCard(Card):
                 text = f"⚠ {filename}"
 
             self.list.addItem(text)
+            self.list.item(self.list.count() - 1).setToolTip(filepath)

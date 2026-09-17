@@ -2,13 +2,16 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 
-DATABASE = Path(__file__).parent / "guardian.db"
+from core.paths import DATA
+
+DATABASE = DATA / "database" / "guardian.db"
 
 
 class GuardianDatabase:
 
     def __init__(self):
-        self.conn = sqlite3.connect(DATABASE)
+        DATABASE.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(DATABASE, timeout=30)
         self.create_tables()
 
     def create_tables(self):

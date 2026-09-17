@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Qt
 
 from core.scan_worker import ScanWorker
 
@@ -18,8 +18,12 @@ class ScanManager:
         maximum_callback=None,
         current_file_callback=None,
         finished_callback=None,
+        error_callback=None,
+        summary_callback=None,
     ):
 
+        if self.thread and self.thread.isRunning():
+            return False
         self.thread = QThread()
         self.worker = ScanWorker(folders)
 
@@ -39,9 +43,24 @@ class ScanManager:
         if finished_callback:
             self.worker.finished.connect(finished_callback)
 
-        self.worker.finished.connect(self.thread.quit)
+        if summary_callback:
+            self.worker.summary.connect(summary_callback)
+        if error_callback:
+            self.worker.error.connect(error_callback)
+        self.worker.finished.connect(self.thread.quit, Qt.ConnectionType.DirectConnection)
+        self.worker.finished.connect(self.worker.deleteLater)
 
         self.thread.start()
+        return True
+
+    def cancel(self):
+        if self.thread and self.thread.isRunning():
+            self.worker.cancelled.set()
+
+    def shutdown(self):
+        if self.thread and self.thread.isRunning():
+            self.worker.cancelled.set()
+            self.thread.wait()
 
     def quick_scan(self, **kwargs):
 
@@ -51,7 +70,7 @@ class ScanManager:
             Path.home() / "Documents",
         ]
 
-        self.start_scan(folders, **kwargs)
+        return self.start_scan(folders, **kwargs)
 
     def full_scan(self, **kwargs):
 
@@ -59,8 +78,8 @@ class ScanManager:
             Path.home()
         ]
 
-        self.start_scan(folders, **kwargs)
+        return self.start_scan(folders, **kwargs)
 
     def custom_scan(self, folder, **kwargs):
 
-        self.start_scan([Path(folder)], **kwargs)
+        return self.start_scan([Path(folder)], **kwargs)
