@@ -19,6 +19,7 @@ class ScanManager:
         current_file_callback=None,
         finished_callback=None,
         error_callback=None,
+        summary_callback=None,
     ):
 
         if self.thread and self.thread.isRunning():
@@ -42,6 +43,8 @@ class ScanManager:
         if finished_callback:
             self.worker.finished.connect(finished_callback)
 
+        if summary_callback:
+            self.worker.summary.connect(summary_callback)
         if error_callback:
             self.worker.error.connect(error_callback)
         self.worker.finished.connect(self.thread.quit, Qt.ConnectionType.DirectConnection)
@@ -49,6 +52,10 @@ class ScanManager:
 
         self.thread.start()
         return True
+
+    def cancel(self):
+        if self.thread and self.thread.isRunning():
+            self.worker.cancelled.set()
 
     def shutdown(self):
         if self.thread and self.thread.isRunning():
@@ -63,7 +70,7 @@ class ScanManager:
             Path.home() / "Documents",
         ]
 
-        self.start_scan(folders, **kwargs)
+        return self.start_scan(folders, **kwargs)
 
     def full_scan(self, **kwargs):
 
@@ -71,8 +78,8 @@ class ScanManager:
             Path.home()
         ]
 
-        self.start_scan(folders, **kwargs)
+        return self.start_scan(folders, **kwargs)
 
     def custom_scan(self, folder, **kwargs):
 
-        self.start_scan([Path(folder)], **kwargs)
+        return self.start_scan([Path(folder)], **kwargs)

@@ -4,9 +4,13 @@ from pathlib import Path
 from core.paths import ROOT
 
 
+def startup_path():
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "autostart" / "guardian.desktop"
+
+
 def set_startup(enabled):
-    folder = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "autostart"
-    entry = folder / "guardian.desktop"
+    entry = startup_path()
+    folder = entry.parent
     if not enabled:
         entry.unlink(missing_ok=True)
         return

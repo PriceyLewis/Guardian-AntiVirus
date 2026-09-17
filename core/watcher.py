@@ -1,4 +1,5 @@
 from pathlib import Path
+from threading import Event
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from core.scanner import GuardianScanner
@@ -10,7 +11,8 @@ from core.paths import QUARANTINE
 
 class GuardianWatcher(FileSystemEventHandler):
     def __init__(self):
-        self.scanner = GuardianScanner()
+        self.scanner = None
+        self.stopping = Event()
         self.quarantine = QuarantineManager()
         self.last_error = None
 
@@ -31,12 +33,18 @@ class GuardianWatcher(FileSystemEventHandler):
             self.scan(event.src_path)
 
     def scan(self, path):
+        if self.stopping.is_set():
+            return
         file = Path(path)
         if file.is_symlink() or not file.is_file() or file.resolve().is_relative_to(QUARANTINE.resolve()):
             return
         db = None
         try:
+            if self.scanner is None:
+                self.scanner = GuardianScanner()
             result = self.scanner.scan_file(file)
+            if self.stopping.is_set():
+                return
             db = GuardianDatabase()  # Created and closed on the observer's thread.
             db.add_scan(str(file.absolute()), result["status"], result.get("virus"))
             if result["status"] == "error":
@@ -55,10 +63,17 @@ class Watcher:
     def __init__(self):
         self.observer = None
         self.handler = None
+        self.retired = []
 
     def start(self):
         if self.observer and self.observer.is_alive():
+            self.handler.stopping.clear()
+            self.handler.last_error = None
             return
+        # A previous observer may still be finishing an engine call.
+        if any(observer.is_alive() for observer in self.retired):
+            raise RuntimeError("Monitoring is stopping. Try enabling it again in a moment.")
+        self.retired.clear()
         self.observer = Observer()
         self.handler = GuardianWatcher()
         count = 0
@@ -69,9 +84,25 @@ class Watcher:
                 count += 1
         if not count:
             raise RuntimeError("No Downloads, Desktop or Documents folders found")
-        self.observer.start()
-
-    def stop(self):
-        if self.observer and self.observer.is_alive():
+        try:
+            self.observer.start()
+        except Exception:
             self.observer.stop()
-            self.observer.join()
+            if self.observer.is_alive():
+                self.observer.join()
+            raise
+
+    def stop(self, wait=False):
+        if self.handler:
+            self.handler.stopping.set()
+        if not wait:
+            return
+        if self.observer:
+            self.observer.stop()
+            self.retired.append(self.observer)
+            self.observer = None
+        if wait:
+            for observer in self.retired:
+                if observer.ident is not None:
+                    observer.join()
+            self.retired.clear()
