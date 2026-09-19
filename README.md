@@ -4,7 +4,7 @@
 
 A Linux desktop security application built with Python, PySide6, ClamAV and SQLite. Guardian coordinates malware scanning, asynchronous folder monitoring, quarantine workflows, persistent history and defensive settings behaviour through a desktop UI.
 
-![Guardian Antivirus portfolio preview](https://priceylewis.github.io/assets/guardian.svg)
+![Guardian Antivirus overview captured from the PySide6 application](docs/screenshots/guardian-overview.png)
 
 > **Portfolio scope:** Guardian is a beta ClamAV frontend and filesystem monitor, not a certified antivirus and not a kernel-level execution blocker. The source is public for portfolio review; no open-source licence is currently attached.
 
