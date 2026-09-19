@@ -1,10 +1,44 @@
 # Guardian Antivirus
 
-Linux desktop ClamAV frontend using PySide6. This is a beta file scanner and folder monitor, not a certified antivirus or a kernel-level execution blocker.
+[![Tests](https://github.com/PriceyLewis/Guardian-AntiVirus/actions/workflows/tests.yml/badge.svg)](https://github.com/PriceyLewis/Guardian-AntiVirus/actions/workflows/tests.yml)
 
-## Run
+A Linux desktop security application built with Python, PySide6, ClamAV and SQLite. Guardian coordinates malware scanning, asynchronous folder monitoring, quarantine workflows, persistent history and defensive settings behaviour through a desktop UI.
 
-Use Python 3.10 or newer in a writable checkout:
+![Guardian Antivirus portfolio preview](https://priceylewis.github.io/assets/guardian.svg)
+
+> **Portfolio scope:** Guardian is a beta ClamAV frontend and filesystem monitor, not a certified antivirus and not a kernel-level execution blocker. The source is public for portfolio review; no open-source licence is currently attached.
+
+## Why this project stands out
+
+Guardian goes beyond a normal CRUD application. It demonstrates:
+
+- Linux-specific process and filesystem integration;
+- long-running/background work without blocking the UI;
+- ClamAV daemon use with CLI fallback;
+- quarantine, restore and overwrite protection;
+- SQLite-backed scan history;
+- settings rollback when persistence/runtime updates fail;
+- tray, notification and login-startup integration;
+- explicit failure states instead of treating scanner errors as clean files;
+- automated pytest regression coverage.
+
+## Recruiter walkthrough
+
+A useful local demo takes only a few minutes:
+
+1. Open the Overview page and show Quick / Home / Custom scan options.
+2. Run a disposable-folder scan.
+3. Use the official harmless EICAR test file if live ClamAV is configured.
+4. Show the detection result and quarantine record.
+5. Open History and demonstrate search/filter/export behaviour.
+6. Open Quarantine and demonstrate safe restore/delete controls.
+7. Toggle monitoring/settings and show that UI state reflects the runtime behaviour.
+
+No live malware is required or recommended.
+
+## Run locally
+
+Use Python 3.10+ in a writable checkout:
 
 ```sh
 python -m venv .venv
@@ -13,21 +47,42 @@ python -m pip install -r requirements.txt
 python guardian.py
 ```
 
-Install ClamAV and its signature databases using your distribution's supported packages. Maintain definitions using the distribution's FreshClam service. Guardian first attempts the local ClamAV daemon, then falls back to `clamscan`. A missing engine, unreadable file, or scan timeout is an error, never a clean result. Desktop notifications optionally use `notify-send`.
+Install ClamAV and its signature databases using your Linux distribution's supported packages and maintain definitions with FreshClam.
 
-Data paths are anchored to the checkout, regardless of working directory, preserving the previous database location. Set `GUARDIAN_DATA_DIR` to use a separate writable directory; existing data is not automatically migrated.
+Guardian first attempts the local ClamAV daemon and then falls back to `clamscan`. A missing engine, unreadable file or scan timeout is surfaced as an error rather than a clean result.
 
-## Behaviour
+## Architecture
+
+```text
+PySide6 / Qt UI
+       |
+       +--> Scan manager ------> clamd / clamscan
+       |
+       +--> Watcher -----------> filesystem events
+       |
+       +--> Quarantine --------> protected local files
+       |
+       +--> Settings ----------> runtime + persistence
+       |
+       +--> SQLite ------------> scan/history state
+       |
+       +--> Notifier / tray / autostart
+```
+
+The implementation keeps scanning, monitoring, persistence, quarantine and notification concerns separate rather than embedding system work directly in the UI layer.
+
+## Behaviour and defensive decisions
 
 - Quick Scan checks existing Downloads, Desktop and Documents folders.
-- Home Scan checks your home directory, not the entire computer. Custom Scan checks a selected folder.
+- Home Scan checks the user's home directory. Custom Scan checks a selected folder.
 - Symlinks and Guardian's quarantine directory are excluded.
-- Threats are moved into a private quarantine directory and recorded in SQLite. Restore refuses to overwrite existing files. Restored files have restrictive permissions and may be detected again by monitoring.
-- Folder monitoring responds to creation, modification, moves and close events. It is asynchronous detection, not access prevention. Large downloads may generate multiple scan records.
-- Real-time settings apply immediately. Notifications and archive settings are read for subsequent operations. Disabling archive inspection selects `clamscan`; otherwise daemon archive policy comes from your ClamAV configuration.
-- Login startup creates a user XDG autostart entry pointing to the current Python environment and checkout. Update this setting after moving the checkout or replacing its virtual environment.
-- The Keep running when the window closes setting controls tray behaviour; without an available tray, closing always exits. Quit waits for an active scan operation to return (CLI timeout: 120 seconds).
-- Definition freshness is not verified by Guardian. The dashboard does not assert that definitions are current or that monitoring alone guarantees protection.
+- Threats are moved into a private quarantine directory and recorded in SQLite.
+- Restore refuses to overwrite an existing destination.
+- Monitoring reacts asynchronously to creation, modification, move and close events; it is detection, not access prevention.
+- Disabling monitoring pauses dispatch immediately and stops the observer cleanly on exit.
+- Cancelled scans are not presented as completed scans.
+- Definition freshness is not falsely asserted by the app.
+- CSV export escapes spreadsheet-formula prefixes in exported values.
 
 ## Tests
 
@@ -36,16 +91,37 @@ python -m pip install pytest
 QT_QPA_PLATFORM=offscreen python -m pytest -q
 ```
 
-Regression tests cover scanner status handling and archive policy, quarantine/restore/delete and overwrite protection, database thread ownership, worker failures, settings, navigation and scan lifecycle. Scanner tests use controlled engine responses; they do not prove live ClamAV detection.
+Regression coverage includes:
 
-Before relying on a release, verify on the target Linux desktop: ClamAV daemon permissions and fallback, current signature databases, official harmless EICAR test detection in a disposable folder, notifications, tray close/quit and login autostart. No live malware is needed. Review performance on large folder trees and active downloads. File changes concurrent with scanning or quarantine are not an adversarially hardened isolation boundary.
+- scanner status and error handling;
+- archive-policy behaviour;
+- quarantine / restore / delete;
+- overwrite protection;
+- database thread ownership;
+- worker failures;
+- settings persistence and rollback;
+- navigation and scan lifecycle.
 
-## Interface and settings
+Scanner tests use controlled engine responses, so they verify application behaviour rather than claiming to prove live antivirus detection.
 
-Overview includes quick, home and custom folder scans, cancellation after the active file, and a result summary that distinguishes clean files, detections, quarantined files and errors. A cancelled scan is never labelled complete. History searches full paths and threat names, filters by outcome, and exports only the visible subset of the latest 500 results as CSV. Spreadsheet formula prefixes in exported values are escaped. Quarantine supports search and uses stored IDs for confirmed restore/delete actions.
+## Target-machine verification
 
-All five settings save automatically. Failed saves restore the previous controls and attempt to restore runtime/autostart state, with a visible error if rollback fails. Unrelated preference changes do not rewrite the login entry. Disabling monitoring pauses dispatch immediately without blocking the UI on an active ClamAV call; its observer is stopped and joined when Guardian quits. Re-enabling resumes observation, but does not retrospectively scan changes made while paused.
+Before treating a build as fully verified on a Linux desktop, check:
 
-Settings also provides Restore defaults (with confirmation), a non-blocking engine version check, and a notification test (available only when notifications are enabled). Checks time out after 10 seconds. A successful engine version check verifies command availability only, not detection or current definitions. A successful notification request still depends on the desktop displaying it.
+- ClamAV daemon permissions and CLI fallback;
+- current signature databases;
+- official harmless EICAR detection in a disposable folder;
+- notification delivery;
+- tray close/quit behaviour;
+- login autostart;
+- performance across large folder trees and active downloads.
 
-The UI was inspected with Qt offscreen at 1180×820 and 900×650. Each page scrolls independently so longer settings content does not stretch history or quarantine. Native Nobara tray integration, login behaviour, notification delivery and live ClamAV remain target-machine checks.
+The UI has also been exercised offscreen at 1180×820 and 900×650 to catch layout regressions.
+
+## Data location
+
+Data paths are anchored to the checkout by default. Set `GUARDIAN_DATA_DIR` to use a separate writable data directory. Existing data is not automatically migrated.
+
+## What this demonstrates
+
+Python desktop development · Linux integration · defensive programming · asynchronous work · SQLite · security tooling · pytest · CI · careful product claims.
