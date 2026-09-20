@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Interactive portfolio demo of Guardian Antivirus, a PySide6, ClamAV and SQLite Linux desktop security application by Lewis Price.">
+  <meta name="theme-color" content="#10151e">
+  <title>Guardian Antivirus | Interactive Portfolio Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="demo-banner" role="note">
+    <strong>Interactive portfolio demo</strong>
+    <span>Uses simulated files and detections. The native Linux application performs the real ClamAV, filesystem monitoring, quarantine and SQLite workflows.</span>
+    <a href="https://github.com/PriceyLewis/Guardian-AntiVirus" target="_blank" rel="noreferrer">View native source ↗</a>
+  </div>
+
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="shield">G</span><span>GUARDIAN</span></div>
+      <nav aria-label="Guardian demo navigation">
+        <button class="nav-item active" data-page="overview">Overview</button>
+        <button class="nav-item" data-action="quick-scan">Quick Scan</button>
+        <button class="nav-item" data-action="home-scan">Home Scan</button>
+        <button class="nav-item" data-page="history">History</button>
+        <button class="nav-item" data-page="quarantine">Quarantine <span id="quarantine-badge" class="nav-badge hidden">0</span></button>
+        <button class="nav-item" data-page="settings">Settings</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span>ClamAV for your desktop</span>
+        <small>Portfolio demo · Linux native app</small>
+        <button id="reset-demo" class="text-button">Reset demo</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <section id="page-overview" class="page active" data-page-panel="overview">
+        <header class="page-heading">
+          <div>
+            <p class="eyebrow">Protection overview</p>
+            <h1>Overview</h1>
+            <p>Your scans, protection activity and quarantined files in one place.</p>
+          </div>
+          <div class="native-chip">Native stack: PySide6 · ClamAV · SQLite</div>
+        </header>
+
+        <section class="card protection-card">
+          <div class="status-icon" id="protection-icon">✓</div>
+          <div>
+            <p class="card-kicker">Protection status</p>
+            <h2 id="protection-status">Folder monitoring is running</h2>
+            <p id="protection-detail">Real-Time Monitoring: Running · Browser demo uses safe simulated events.</p>
+          </div>
+          <span class="status-pill" id="status-pill">Protected</span>
+        </section>
+
+        <div class="stats-grid">
+          <article class="card stat-card"><span>Files processed</span><strong id="stat-files">0</strong><small>Across demo scans</small></article>
+          <article class="card stat-card"><span>Detections</span><strong id="stat-threats">0</strong><small>Safe mock detections</small></article>
+          <article class="card stat-card"><span>In quarantine</span><strong id="stat-quarantine">0</strong><small>Isolated demo files</small></article>
+        </div>
+
+        <section class="card scan-card">
+          <div class="section-title-row">
+            <div>
+              <h2>Start a scan</h2>
+              <p>Choose the area you want to check. This demo scans a safe virtual filesystem.</p>
+            </div>
+            <button id="cancel-scan" class="btn secondary hidden">Cancel scan</button>
+          </div>
+
+          <div class="scan-actions">
+            <button class="scan-option primary" data-scan="quick"><strong>Quick scan</strong><span>Downloads, Desktop & Documents</span></button>
+            <button class="scan-option" data-scan="home"><strong>Home scan</strong><span>Full simulated home folder</span></button>
+            <button class="scan-option" data-scan="custom"><strong>Demo folder</strong><span>A smaller controlled sample</span></button>
+          </div>
+
+          <div class="scan-progress-wrap">
+            <div class="scan-state-row"><strong id="scan-state">Ready to scan</strong><span id="scan-count">0 / 0</span></div>
+            <div class="progress-track" aria-label="Scan progress"><div id="progress-bar" class="progress-bar"></div></div>
+            <p id="current-file" class="current-file">Scan results will appear here.</p>
+            <div id="scan-summary" class="scan-summary hidden"></div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-title-row">
+            <div><h2>Recent activity</h2><p>Latest events from this browser session.</p></div>
+            <button id="simulate-download" class="btn secondary">Add suspicious sample</button>
+          </div>
+          <div id="recent-activity" class="activity-list"></div>
+        </section>
+
+        <section class="card architecture-card">
+          <h2>What the native app does</h2>
+          <div class="architecture-flow">
+            <span>PySide6 UI</span><b>→</b><span>Scan Manager</span><b>→</b><span>clamd / clamscan</span><b>→</b><span>Quarantine</span><b>→</b><span>SQLite History</span>
+          </div>
+          <p>This browser build mirrors Guardian's user journeys. It does not access your computer, scan local files or claim to provide browser-based malware protection.</p>
+        </section>
+      </section>
+
+      <section id="page-history" class="page" data-page-panel="history">
+        <header class="page-heading"><div><p class="eyebrow">Audit trail</p><h1>Scan history</h1><p>Review demo file results. Errors mean a file was not successfully checked.</p></div></header>
+        <section class="card">
+          <div class="toolbar">
+            <input id="history-search" type="search" placeholder="Search file paths or threat names…" aria-label="Search history">
+            <select id="history-filter" aria-label="Filter history">
+              <option value="">All results</option>
+              <option value="clean">Clean</option>
+              <option value="found">Detections</option>
+              <option value="error">Errors</option>
+            </select>
+            <button id="export-history" class="btn secondary">Export CSV</button>
+          </div>
+          <div class="table-wrap">
+            <table><thead><tr><th>Time</th><th>File path</th><th>Result</th><th>Details</th></tr></thead><tbody id="history-body"></tbody></table>
+          </div>
+          <p id="history-count" class="muted"></p>
+        </section>
+      </section>
+
+      <section id="page-quarantine" class="page" data-page-panel="quarantine">
+        <header class="page-heading"><div><p class="eyebrow">Isolation</p><h1>Quarantine</h1><p>Detected demo files are isolated here. The native app moves real detections into a protected local quarantine directory.</p></div></header>
+        <section class="card">
+          <div class="toolbar">
+            <input id="quarantine-search" type="search" placeholder="Search quarantined files…" aria-label="Search quarantine">
+          </div>
+          <div class="table-wrap">
+            <table><thead><tr><th>Date</th><th>Original file</th><th>Detection</th><th>Action</th></tr></thead><tbody id="quarantine-body"></tbody></table>
+          </div>
+          <p id="quarantine-empty" class="empty-state">Quarantine is empty. Detected files will appear here.</p>
+        </section>
+      </section>
+
+      <section id="page-settings" class="page" data-page-panel="settings">
+        <header class="page-heading"><div><p class="eyebrow">Preferences</p><h1>Settings</h1><p>Changes save automatically in this browser using localStorage.</p></div></header>
+
+        <section class="card settings-card">
+          <h2>Protection</h2>
+          <p>These switches mirror the native application's persisted settings.</p>
+          <label class="setting-row"><span><strong>Monitor files in real time</strong><small>Simulate asynchronous detection for new demo files.</small></span><input type="checkbox" data-setting="realtime"></label>
+          <label class="setting-row"><span><strong>Inspect archives</strong><small>Mirrors the ClamAV archive-policy preference.</small></span><input type="checkbox" data-setting="archives"></label>
+        </section>
+
+        <section class="card settings-card">
+          <h2>Desktop</h2>
+          <label class="setting-row"><span><strong>Show desktop notifications</strong><small>Shows in-demo notifications when a sample is quarantined.</small></span><input type="checkbox" data-setting="notifications"></label>
+          <label class="setting-row"><span><strong>Start Guardian at login</strong><small>Demonstrates the native autostart preference.</small></span><input type="checkbox" data-setting="startup"></label>
+          <label class="setting-row"><span><strong>Keep running when the window closes</strong><small>Mirrors native system-tray behaviour.</small></span><input type="checkbox" data-setting="close_to_tray"></label>
+        </section>
+
+        <section class="card">
+          <h2>Checks & maintenance</h2>
+          <p id="engine-result">Browser demo: ClamAV engine checks are available only in the native Linux build.</p>
+          <div class="button-row">
+            <button id="check-engine" class="btn secondary">Explain native engine check</button>
+            <button id="restore-defaults" class="btn secondary">Restore defaults</button>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
