@@ -150,6 +150,9 @@ jobs:
             await mobile.getByRole('button', { name: 'Add suspicious sample' }).click();
             await mobile.getByRole('button', { name: /Quarantine/ }).click();
             await mobile.getByRole('button', { name: 'Restore' }).waitFor();
+            if (await mobile.locator('#toast-region .toast').count()) {
+              throw new Error('Stale Guardian toast remained after page navigation');
+            }
 
             const mobileLayout = await mobile.evaluate(() => ({
               viewport: innerWidth,
