@@ -1,0 +1,135 @@
+name: Interactive Web Demo
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: guardian-web-demo
+  cancel-in-progress: true
+
+jobs:
+  test-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run native Python regression tests
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pytest
+          python -m pytest -q
+
+      - name: Prepare static demo
+        run: |
+          rm -rf dist
+          mkdir -p dist
+          cp -R web-demo/. dist/
+          touch dist/.nojekyll
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install browser test dependency
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Verify recruiter demo journeys
+        run: |
+          python3 -m http.server 4173 --directory dist >/tmp/guardian-demo.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+
+          for attempt in {1..20}; do
+            if curl -fsS http://127.0.0.1:4173/ >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          node <<'NODE'
+          const { chromium } = require('playwright');
+
+          (async () => {
+            const browser = await chromium.launch();
+            const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+            await page.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle' });
+
+            await page.getByText('Interactive portfolio demo', { exact: true }).waitFor();
+            await page.getByRole('button', { name: 'Add suspicious sample' }).click();
+
+            let state = await page.evaluate(() => window.__guardianDemo.getState());
+            if (state.detections !== 1 || state.quarantine !== 1 || state.history !== 1) {
+              throw new Error('Real-time protection journey failed: ' + JSON.stringify(state));
+            }
+
+            await page.getByRole('button', { name: /Quarantine/ }).click();
+            await page.getByRole('button', { name: 'Restore' }).click();
+
+            state = await page.evaluate(() => window.__guardianDemo.getState());
+            if (state.quarantine !== 0) {
+              throw new Error('Restore journey failed: ' + JSON.stringify(state));
+            }
+
+            await page.getByRole('button', { name: 'Settings' }).click();
+            const realtime = page.locator('[data-setting="realtime"]');
+            await realtime.uncheck();
+            await page.reload({ waitUntil: 'networkidle' });
+            await page.getByRole('button', { name: 'Settings' }).click();
+            if (await page.locator('[data-setting="realtime"]').isChecked()) {
+              throw new Error('Settings persistence failed');
+            }
+
+            await page.locator('[data-setting="realtime"]').check();
+            await page.getByRole('button', { name: 'Overview' }).click();
+            await page.getByRole('button', { name: 'Quick scan', exact: true }).click();
+            await page.waitForFunction(() => window.__guardianDemo.getState().history >= 8, null, { timeout: 15000 });
+
+            state = await page.evaluate(() => window.__guardianDemo.getState());
+            if (state.filesProcessed < 8 || state.detections < 1 || state.quarantine < 1) {
+              throw new Error('Quick scan journey failed: ' + JSON.stringify(state));
+            }
+
+            await page.screenshot({ path: 'guardian-web-demo.png', fullPage: true });
+            console.log('Guardian demo verified:', state);
+            await browser.close();
+          })().catch(error => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
+
+      - name: Upload demo screenshot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: guardian-interactive-demo
+          path: guardian-web-demo.png
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Publish gh-pages branch
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b gh-pages
+          git add .
+          git commit -m "Deploy Guardian interactive demo from ${GITHUB_SHA}"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force origin gh-pages
