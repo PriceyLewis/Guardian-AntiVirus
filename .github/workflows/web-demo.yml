@@ -101,11 +101,42 @@ jobs:
             await page.locator('[data-setting="realtime"]').check();
             await page.getByRole('button', { name: 'Overview' }).click();
             await page.locator('.scan-option[data-scan="quick"]').click();
-            await page.waitForFunction(() => window.__guardianDemo.getState().history >= 8, null, { timeout: 15000 });
+            await page.waitForFunction(
+              () => !window.__guardianDemo.getState().scanning && window.__guardianDemo.getState().filesProcessed >= 8,
+              null,
+              { timeout: 15000 }
+            );
 
             state = await page.evaluate(() => window.__guardianDemo.getState());
-            if (state.filesProcessed < 8 || state.detections < 1 || state.quarantine < 1) {
+            if (state.filesProcessed !== 8 || state.detections !== 1 || state.quarantine !== 1) {
               throw new Error('Quick scan journey failed: ' + JSON.stringify(state));
+            }
+
+            // A quarantined file must be absent from the virtual filesystem on the next scan.
+            await page.locator('.scan-option[data-scan="quick"]').click();
+            await page.waitForFunction(
+              () => !window.__guardianDemo.getState().scanning && window.__guardianDemo.getState().filesProcessed >= 15,
+              null,
+              { timeout: 15000 }
+            );
+            state = await page.evaluate(() => window.__guardianDemo.getState());
+            if (state.detections !== 1 || state.quarantine !== 1) {
+              throw new Error('Quarantined sample was detected twice: ' + JSON.stringify(state));
+            }
+
+            // Restoring puts the virtual file back, so the next scan should detect it again.
+            await page.getByRole('button', { name: /Quarantine/ }).click();
+            await page.getByRole('button', { name: 'Restore' }).click();
+            await page.getByRole('button', { name: 'Overview' }).click();
+            await page.locator('.scan-option[data-scan="quick"]').click();
+            await page.waitForFunction(
+              () => !window.__guardianDemo.getState().scanning && window.__guardianDemo.getState().detections === 2,
+              null,
+              { timeout: 15000 }
+            );
+            state = await page.evaluate(() => window.__guardianDemo.getState());
+            if (state.quarantine !== 1 || state.detections !== 2) {
+              throw new Error('Restored sample was not re-detected correctly: ' + JSON.stringify(state));
             }
 
             await page.screenshot({ path: 'guardian-web-demo.png', fullPage: true });
