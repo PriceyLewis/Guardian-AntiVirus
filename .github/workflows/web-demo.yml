@@ -141,6 +141,47 @@ jobs:
 
             await page.screenshot({ path: 'guardian-web-demo.png', fullPage: true });
             console.log('Guardian demo verified:', state);
+
+            // Mobile visual regression: quarantine actions must remain on-screen and the page must not overflow.
+            const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+            const mobileErrors = [];
+            mobile.on('pageerror', error => mobileErrors.push(error.message));
+            await mobile.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle' });
+            await mobile.getByRole('button', { name: 'Add suspicious sample' }).click();
+            await mobile.getByRole('button', { name: /Quarantine/ }).click();
+            await mobile.getByRole('button', { name: 'Restore' }).waitFor();
+
+            const mobileLayout = await mobile.evaluate(() => ({
+              viewport: innerWidth,
+              documentWidth: document.documentElement.scrollWidth,
+              restore: (() => {
+                const el = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Restore');
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { left: r.left, right: r.right, width: r.width };
+              })(),
+              deleteButton: (() => {
+                const el = [...document.querySelectorAll('button')].find(button => button.textContent?.trim() === 'Delete');
+                if (!el) return null;
+                const r = el.getBoundingClientRect();
+                return { left: r.left, right: r.right, width: r.width };
+              })(),
+            }));
+
+            if (mobileErrors.length) {
+              throw new Error('Guardian mobile page errors: ' + mobileErrors.join(' | '));
+            }
+            if (mobileLayout.documentWidth > mobileLayout.viewport + 2) {
+              throw new Error('Guardian mobile horizontal overflow: ' + JSON.stringify(mobileLayout));
+            }
+            for (const [name, rect] of [['Restore', mobileLayout.restore], ['Delete', mobileLayout.deleteButton]]) {
+              if (!rect || rect.left < -1 || rect.right > mobileLayout.viewport + 1 || rect.width < 40) {
+                throw new Error(name + ' action is not usable on mobile: ' + JSON.stringify(mobileLayout));
+              }
+            }
+
+            await mobile.screenshot({ path: 'guardian-web-demo-mobile.png', fullPage: true });
+            await mobile.close();
             await browser.close();
           })().catch(error => {
             console.error(error);
@@ -153,7 +194,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: guardian-interactive-demo
-          path: guardian-web-demo.png
+          path: |
+            guardian-web-demo.png
+            guardian-web-demo-mobile.png
           if-no-files-found: warn
           retention-days: 7
 
