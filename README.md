@@ -6,6 +6,25 @@ A Linux desktop security application built with Python, PySide6, ClamAV and SQLi
 
 ![Guardian Antivirus overview captured from the PySide6 application](docs/screenshots/guardian-overview.png)
 
+## Interactive browser demo
+
+A recruiter-facing static demo now lives in `web-demo/`. It mirrors Guardian's real interface and workflows using a safe virtual filesystem rather than pretending a browser can provide native antivirus protection.
+
+The demo includes:
+- Quick, Home and controlled-folder scan journeys;
+- safe simulated detection and quarantine;
+- restore/delete quarantine actions;
+- scan history and CSV export;
+- real-time monitoring simulation;
+- persisted settings through browser localStorage;
+- explicit links back to the native PySide6/ClamAV source.
+
+The browser demo is tested in Chromium after the native Python regression suite passes, then published to the `gh-pages` branch.
+
+**Important:** the browser build never scans a recruiter's real files. The native Linux application remains the implementation that integrates with ClamAV, filesystem events, quarantine storage and SQLite.
+
+
+
 > **Portfolio scope:** Guardian is a beta ClamAV frontend and filesystem monitor, not a certified antivirus and not a kernel-level execution blocker. The source is public for portfolio review; no open-source licence is currently attached.
 
 ## Why this project stands out
