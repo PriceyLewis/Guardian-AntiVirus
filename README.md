@@ -2,6 +2,15 @@
 
 [![Tests](https://github.com/PriceyLewis/Guardian-AntiVirus/actions/workflows/tests.yml/badge.svg)](https://github.com/PriceyLewis/Guardian-AntiVirus/actions/workflows/tests.yml)
 
+
+## Portfolio release status
+
+**v1.0.0 Portfolio Release · Verified 20 September 2026**
+
+This is the recruiter-facing release of the project. Automated tests and the public demo journey have been re-verified before publication.
+
+[Read the v1.0.0 release notes](./RELEASE_NOTES_v1.0.0.md)
+
 [Launch the interactive demo](https://priceylewis.github.io/Guardian-AntiVirus/) · [View the recruiter case study](https://priceylewis.github.io/projects/guardian.html)
 
 A Linux desktop security application built with Python, PySide6, ClamAV and SQLite. Guardian coordinates malware scanning, asynchronous folder monitoring, quarantine workflows, persistent history and defensive settings behaviour through a desktop UI.
