@@ -209,13 +209,13 @@ jobs:
             }
 
             await mobile.screenshot({ path: 'guardian-web-demo-mobile.png', fullPage: true });
-            await mobile.close();
             await mobile.getByRole('button', { name: 'History', exact: true }).click();
             await mobile.getByRole('searchbox', { name: 'Search history' }).fill('sample');
             await mobile.setViewportSize({ width: 320, height: 740 });
             const historyWidth = await mobile.evaluate(() => ({ width: innerWidth, content: document.documentElement.scrollWidth }));
             if (historyWidth.content > historyWidth.width + 2) throw new Error('History toolbar overflows mobile: ' + JSON.stringify(historyWidth));
             await mobile.screenshot({ path: 'guardian-history-mobile.png', fullPage: true });
+            await mobile.close();
 
             await browser.close();
           })().catch(error => {
