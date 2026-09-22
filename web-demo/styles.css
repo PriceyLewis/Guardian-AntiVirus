@@ -34,3 +34,4 @@
 }
 /* Keep history controls usable at phone widths and high zoom. */
 @media(max-width:850px){.toolbar{flex-wrap:wrap}.toolbar input{min-width:0;flex-basis:100%}.toolbar select,.toolbar button{flex:1;min-width:0}.current-file{overflow-wrap:anywhere}.section-title-row{flex-wrap:wrap}.setting-row input{flex-shrink:0}.toast-region{left:16px;right:16px}.toast{max-width:100%}}
+@media(max-width:850px){.sidebar nav{grid-template-columns:repeat(3,minmax(0,1fr))}.nav-item{min-width:0;padding:12px 6px;font-size:14px;overflow-wrap:anywhere}}
