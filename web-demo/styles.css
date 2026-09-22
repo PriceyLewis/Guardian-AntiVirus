@@ -32,3 +32,5 @@
 #page-quarantine .table-action::before{content:"Action";color:#9aaac1;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;flex:0 0 86px}
 #page-quarantine .table-action button{flex:1 1 90px}
 }
+/* Keep history controls usable at phone widths and high zoom. */
+@media(max-width:850px){.toolbar{flex-wrap:wrap}.toolbar input{min-width:0;flex-basis:100%}.toolbar select,.toolbar button{flex:1;min-width:0}.current-file{overflow-wrap:anywhere}.section-title-row{flex-wrap:wrap}.setting-row input{flex-shrink:0}.toast-region{left:16px;right:16px}.toast{max-width:100%}}

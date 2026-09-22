@@ -139,6 +139,31 @@ jobs:
               throw new Error('Restored sample was not re-detected correctly: ' + JSON.stringify(state));
             }
 
+            // New samples remain in the virtual filesystem after restore and
+            // when monitoring is off; each can be found by a later manual scan.
+            await page.getByRole('button', { name: 'Add suspicious sample' }).click();
+            await page.getByRole('button', { name: /Quarantine/ }).click();
+            await page.getByRole('row').filter({ hasText: 'new_suspicious_sample_1.exe' }).getByRole('button', { name: 'Restore', exact: true }).click();
+            await page.getByRole('button', { name: 'Quick Scan', exact: true }).click();
+            await page.waitForFunction(() => !window.__guardianDemo.getState().scanning);
+            state = await page.evaluate(() => window.__guardianDemo.getState());
+            if (state.detections !== 4 || state.quarantine !== 2) throw new Error('Restored dynamic sample was lost: ' + JSON.stringify(state));
+            await page.getByRole('button', { name: 'Settings' }).click();
+            await page.locator('[data-setting="realtime"]').uncheck();
+            await page.getByRole('button', { name: 'Overview', exact: true }).click();
+            await page.getByRole('button', { name: 'Add suspicious sample' }).click();
+            await page.getByRole('button', { name: 'Quick Scan', exact: true }).click();
+            await page.waitForFunction(() => !window.__guardianDemo.getState().scanning);
+            state = await page.evaluate(() => window.__guardianDemo.getState());
+            if (state.detections !== 5 || state.quarantine !== 3) throw new Error('Unmonitored sample was lost: ' + JSON.stringify(state));
+            await page.getByRole('button', { name: 'History', exact: true }).click();
+            await page.getByRole('searchbox', { name: 'Search history' }).fill('new_suspicious_sample_2.exe');
+            const downloadPromise = page.waitForEvent('download');
+            await page.getByRole('button', { name: 'Export CSV' }).click();
+            const download = await downloadPromise;
+            const csv = require('fs').readFileSync(await download.path(), 'utf8');
+            if (!csv.includes('new_suspicious_sample_2.exe') || csv.includes('coursework-notes.pdf')) throw new Error('CSV ignored the current filter');
+
             await page.screenshot({ path: 'guardian-web-demo.png', fullPage: true });
             console.log('Guardian demo verified:', state);
 
@@ -185,6 +210,13 @@ jobs:
 
             await mobile.screenshot({ path: 'guardian-web-demo-mobile.png', fullPage: true });
             await mobile.close();
+            await mobile.getByRole('button', { name: 'History', exact: true }).click();
+            await mobile.getByRole('searchbox', { name: 'Search history' }).fill('sample');
+            await mobile.setViewportSize({ width: 320, height: 740 });
+            const historyWidth = await mobile.evaluate(() => ({ width: innerWidth, content: document.documentElement.scrollWidth }));
+            if (historyWidth.content > historyWidth.width + 2) throw new Error('History toolbar overflows mobile: ' + JSON.stringify(historyWidth));
+            await mobile.screenshot({ path: 'guardian-history-mobile.png', fullPage: true });
+
             await browser.close();
           })().catch(error => {
             console.error(error);
@@ -200,6 +232,7 @@ jobs:
           path: |
             guardian-web-demo.png
             guardian-web-demo-mobile.png
+            guardian-history-mobile.png
           if-no-files-found: warn
           retention-days: 7
 

@@ -23,6 +23,7 @@ const state={
  cancelled:false,
  scanTimer:null,
  deletedPaths:new Set(),
+ downloads:[],
  downloadSequence:0
 };
 function loadSettings(){try{return {...DEFAULT_SETTINGS,...JSON.parse(localStorage.getItem("guardian-demo-settings")||"{}")}}catch{return {...DEFAULT_SETTINGS}}}
@@ -49,7 +50,7 @@ function setScanningUi(active){
 function getScanFiles(type){
  const source=type==="custom"?FILES.slice(0,5):type==="quick"?FILES.slice(0,8):FILES;
  const quarantined=new Set(state.quarantine.map(item=>item.path));
- return source.filter(file=>!quarantined.has(file.path)&&!state.deletedPaths.has(file.path));
+ return [...source,...(type==="custom"?[]:state.downloads)].filter(file=>!quarantined.has(file.path)&&!state.deletedPaths.has(file.path));
 }
 function startScan(type){
  if(state.scanning)return;
@@ -85,21 +86,25 @@ function simulateDownload(){
  state.downloadSequence+=1;
  const filename="new_suspicious_sample_"+state.downloadSequence+".exe";
  const path="/home/demo/Downloads/"+filename,detection="EICAR-Test-Signature";
+ state.downloads.push({path,threat:detection});
  addActivity("File created",filename);
  if(state.settings.realtime){state.filesProcessed++;state.detections++;addHistory(path,"found",detection+" · real-time monitor");addQuarantine(path,detection);addActivity("Real-time detection","Sample quarantined automatically");if(state.settings.notifications)toast("Threat quarantined","Guardian isolated a safe simulated detection.");updateStats()}else{addActivity("Monitoring off","Sample was not automatically scanned");toast("Monitoring is off","Turn real-time monitoring on in Settings to auto-check new demo files.")}
  renderActivity();
 }
 document.querySelector("#simulate-download").addEventListener("click",simulateDownload);
 function resultLabel(result){return result==="found"?"Detection":result==="clean"?"Clean":"Error"}
+function filteredHistory(){
+ const q=document.querySelector("#history-search").value.toLowerCase(),filter=document.querySelector("#history-filter").value;return state.history.filter(r=>(!filter||r.result===filter)&&(!q||(r.path+" "+r.details).toLowerCase().includes(q)));
+}
 function renderHistory(){
- const q=document.querySelector("#history-search").value.toLowerCase(),filter=document.querySelector("#history-filter").value;const rows=state.history.filter(r=>(!filter||r.result===filter)&&(!q||(r.path+" "+r.details).toLowerCase().includes(q)));
+ const rows=filteredHistory();
  const body=document.querySelector("#history-body");body.innerHTML="";
  for(const r of rows){const tr=document.createElement("tr");for(const val of [r.time,r.path,resultLabel(r.result),r.details]){const td=document.createElement("td");td.textContent=val;tr.append(td)}tr.children[2].className="result-"+r.result;body.append(tr)}
  document.querySelector("#history-count").textContent=rows.length?"Showing "+rows.length+" of "+state.history.length+" recent results":"No results match the current filters.";
 }
 document.querySelector("#history-search").addEventListener("input",renderHistory);document.querySelector("#history-filter").addEventListener("change",renderHistory);
 document.querySelector("#export-history").addEventListener("click",()=>{
- const rows=[["Time","File path","Result","Details"],...state.history.map(r=>[r.time,r.path,resultLabel(r.result),r.details])];const csv=rows.map(row=>row.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="guardian-demo-history.csv";a.click();URL.revokeObjectURL(a.href);
+ const rows=[["Time","File path","Result","Details"],...filteredHistory().map(r=>[r.time,r.path,resultLabel(r.result),r.details])];const csv=rows.map(row=>row.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(",")).join("\n");const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv"}));a.download="guardian-demo-history.csv";a.click();URL.revokeObjectURL(a.href);
 });
 function renderQuarantine(){
  const q=document.querySelector("#quarantine-search").value.toLowerCase();const rows=state.quarantine.filter(r=>(r.path+" "+r.detection).toLowerCase().includes(q));const body=document.querySelector("#quarantine-body");body.innerHTML="";
@@ -112,6 +117,6 @@ function renderSettings(){document.querySelectorAll("[data-setting]").forEach(i=
 document.querySelectorAll("[data-setting]").forEach(i=>i.addEventListener("change",()=>{state.settings[i.dataset.setting]=i.checked;persistSettings();updateProtection();toast("Settings saved","Changes applied to the interactive demo.")}));
 document.querySelector("#restore-defaults").addEventListener("click",()=>{state.settings={...DEFAULT_SETTINGS};persistSettings();renderSettings();toast("Defaults restored","Guardian demo settings returned to defaults.")});
 document.querySelector("#check-engine").addEventListener("click",()=>{document.querySelector("#engine-result").textContent="Native Guardian checks clamscan --version with a timeout and reports failures explicitly. This static demo cannot execute system binaries.";});
-document.querySelector("#reset-demo").addEventListener("click",()=>{clearTimeout(state.scanTimer);state.history=[];state.quarantine=[];state.deletedPaths.clear();state.downloadSequence=0;state.filesProcessed=0;state.detections=0;state.scanning=false;state.cancelled=false;activity.length=0;setScanningUi(false);updateStats();renderActivity();renderHistory();renderQuarantine();document.querySelector("#scan-state").textContent="Ready to scan";document.querySelector("#scan-count").textContent="0 / 0";document.querySelector("#progress-bar").style.width="0%";document.querySelector("#current-file").textContent="Scan results will appear here.";document.querySelector("#scan-summary").classList.add("hidden");navigate("overview");toast("Demo reset","Session data cleared; saved settings were retained.")});
+document.querySelector("#reset-demo").addEventListener("click",()=>{clearTimeout(state.scanTimer);state.history=[];state.quarantine=[];state.deletedPaths.clear();state.downloadSequence=0;state.downloads=[];state.filesProcessed=0;state.detections=0;state.scanning=false;state.cancelled=false;activity.length=0;setScanningUi(false);updateStats();renderActivity();renderHistory();renderQuarantine();document.querySelector("#history-search").value="";document.querySelector("#history-filter").value="";document.querySelector("#quarantine-search").value="";renderHistory();renderQuarantine();document.querySelector("#scan-state").textContent="Ready to scan";document.querySelector("#scan-count").textContent="0 / 0";document.querySelector("#progress-bar").style.width="0%";document.querySelector("#current-file").textContent="Scan results will appear here.";document.querySelector("#scan-summary").classList.add("hidden");navigate("overview");toast("Demo reset","Session data cleared; saved settings were retained.")});
 updateProtection();updateStats();renderActivity();renderSettings();
 window.__guardianDemo={startScan,simulateDownload,getState:()=>({filesProcessed:state.filesProcessed,detections:state.detections,quarantine:state.quarantine.length,history:state.history.length,realtime:state.settings.realtime,scanning:state.scanning,deleted:state.deletedPaths.size})};
