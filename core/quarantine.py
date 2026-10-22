@@ -1,8 +1,18 @@
 from pathlib import Path
+import hashlib
 import shutil
 import uuid
 from core.paths import QUARANTINE
 from database.database import GuardianDatabase
+
+
+def sha256(path):
+    """Fingerprint for looking a detection up in VirusTotal or similar services."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 class QuarantineManager:
@@ -20,7 +30,7 @@ class QuarantineManager:
         try:
             shutil.move(str(source), str(destination))
             destination.chmod(0o600)
-            db.add_quarantine(str(source), str(destination), virus)
+            db.add_quarantine(str(source), str(destination), virus, sha256(destination))
         except Exception:
             if destination.exists() and not source.exists():
                 shutil.move(str(destination), str(source))

@@ -17,11 +17,14 @@ class ScanWorker(QObject):
     finished = Signal(int)
     error = Signal(str)
     summary = Signal(dict)
+    result = Signal(str, str, str)
 
-    def __init__(self, folders, name="Scan"):
+    def __init__(self, folders, name="Scan", quarantine=True):
         super().__init__()
+        # Despite the name, entries may also be individual files.
         self.folders = folders
         self.name = name
+        self.quarantine_found = quarantine
         self.cancelled = Event()
 
     def run(self):
@@ -41,8 +44,13 @@ class ScanWorker(QObject):
             def walk_error(exc):
                 report_error(str(exc))
             for folder in self.folders:
-                if not Path(folder).is_dir():
-                    report_error(f"Folder unavailable: {folder}")
+                target = Path(folder).absolute()
+                if not target.is_symlink() and target.is_file():
+                    if not is_guardian_storage(target, QUARANTINE) and not is_excluded(target, exclusions):
+                        files.add(target)
+                    continue
+                if not target.is_dir():
+                    report_error(f"Not found or not accessible: {folder}")
                     continue
                 for directory, dirs, names in os.walk(folder, onerror=walk_error, followlinks=False):
                     if self.cancelled.is_set():
@@ -63,11 +71,12 @@ class ScanWorker(QObject):
             for file, result in scanner.scan_files(sorted(files), started=started):
                 status, virus = result["status"], result.get("virus")
                 db.add_scan(str(file), status, virus)
+                self.result.emit(str(file), status, virus or "")
                 if status in ("clean", "found"):
                     totals[status] += 1
                 if status == "error":
                     report_error(f"{file}: {virus}")
-                if status == "found":
+                if status == "found" and self.quarantine_found:
                     try:
                         quarantine.quarantine(file, virus)
                         totals["quarantined"] += 1

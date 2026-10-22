@@ -8,6 +8,9 @@ from ui.tray import GuardianTray
 
 
 def main():
+    if sys.argv[1:2] == ["--scan"]:
+        from core.cli import run_scan
+        return run_scan(sys.argv[2:])
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(str(ROOT / "assets/icons/Guardian.png")))
     theme = ROOT / "assets/themes/dark.qss"

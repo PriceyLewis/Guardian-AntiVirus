@@ -79,6 +79,15 @@ python -m pip install -r requirements.txt
 python guardian.py
 ```
 
+### Command-line scanning
+
+```sh
+python guardian.py --scan ~/Downloads/suspicious.zip ~/Projects
+python guardian.py --scan --report-only /media/usb
+```
+
+Each file prints `OK`, `FOUND <signature>` or `ERROR <reason>`, followed by a summary. Detections are quarantined unless `--report-only` is given. Exit codes follow `clamscan`: `0` nothing found, `1` threat found, `2` errors only. Results appear in the app's History.
+
 Install ClamAV and its signature databases using your Linux distribution's supported packages and maintain definitions with FreshClam.
 
 Guardian first attempts the local ClamAV daemon and then falls back to `clamscan`. A missing engine, unreadable file or scan timeout is surfaced as an error rather than a clean result.
@@ -106,7 +115,8 @@ The implementation keeps scanning, monitoring, persistence, quarantine and notif
 ## Behaviour and defensive decisions
 
 - Quick Scan checks existing Downloads, Desktop and Documents folders.
-- Home Scan checks the user's home directory. Custom Scan checks a selected folder.
+- Home Scan checks the user's home directory. Custom Scan checks a selected folder, selected files, or files and folders dropped onto the window.
+- Real-time monitoring watches a user-editable folder list (Downloads, Desktop and Documents by default). It can be paused for an hour from the tray and resumes automatically.
 - Symlinks and Guardian's own quarantine, database and config files are excluded, so monitoring never rescans its own history writes.
 - The ClamAV daemon is tried on the Debian/Ubuntu, Arch and Fedora socket paths. Without it, files are batched into one `clamscan` run per 100 files instead of reloading signatures for every file.
 - Threats are moved into a private quarantine directory and recorded in SQLite.
@@ -121,6 +131,10 @@ The implementation keeps scanning, monitoring, persistence, quarantine and notif
 - Overview shows the ClamAV signature version and age from `clamscan --version`, and warns when definitions are missing or more than 7 days old.
 - Each scan run is recorded with its duration, so the last scan survives restarts.
 - Excluded folders (Settings) are skipped by scans and monitoring.
+- Quarantine records each file's SHA-256 so a detection can be looked up (for example on VirusTotal) without uploading it. Several records can be restored or deleted at once, and the list exports as CSV.
+- Settings can run FreshClam to update definitions and explains when the system FreshClam service or administrator rights are needed instead.
+- History filters by result and by period (24 hours, 7 days, 30 days).
+- When a scan finishes while the window is hidden, a desktop notification reports the result.
 - An optional daily Quick scan runs while Guardian is open if no scan has run in 24 hours; cancelling it postpones it to the next day.
 - Only one Guardian instance runs per data directory, so monitors never duplicate.
 - The login entry starts Guardian minimised to the tray (`--minimized`) when a tray is available.
@@ -143,6 +157,8 @@ Regression coverage includes:
 - settings persistence and rollback;
 - batched clamscan parsing and monitoring self-exclusion;
 - monitoring debounce, exclusions, definitions freshness and scheduled scans;
+- command-line exit codes, file and drag-and-drop scans, monitored-folder changes, pause/resume;
+- quarantine fingerprints, schema migration, bulk actions and reports;
 - navigation and scan lifecycle.
 
 Scanner tests use controlled engine responses, so they verify application behaviour rather than claiming to prove live antivirus detection.

@@ -1,3 +1,5 @@
+import csv
+from pathlib import Path
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QPushButton
 
 
@@ -31,3 +33,14 @@ def button(text, callback, style="secondary"):
     control.setObjectName(style)
     control.clicked.connect(callback)
     return control
+
+
+def write_csv(path, header, rows):
+    # Neutralise spreadsheet formulas in untrusted filenames and engine text.
+    def safe(value):
+        value = str(value or "")
+        return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")) else value
+    with Path(path).open("w", encoding="utf-8-sig", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(header)
+        writer.writerows([safe(value) for value in row] for row in rows)

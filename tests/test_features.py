@@ -395,18 +395,24 @@ def test_scheduled_scan_runs_daily_only_when_enabled(isolated,app):
     finally:
         window.shutdown()
 
-def test_settings_exclusion_list(isolated,app,monkeypatch):
+def test_settings_folder_lists(isolated,app,monkeypatch):
     from ui.settings import SettingsPage
     from PySide6.QtWidgets import QFileDialog
+    from database.database import GuardianDatabase
     folder=isolated/'trusted';folder.mkdir()
     monkeypatch.setattr(QFileDialog,'getExistingDirectory',lambda *a:str(folder))
-    page=SettingsPage()
-    assert page.exclusions.item(0).text()=='No folders excluded.'
-    page.add_exclusion()
-    assert page.exclusions.item(0).text()==str(folder)
-    page.exclusions.setCurrentRow(0);assert page.remove_exclusion_button.isEnabled()
-    page.remove_exclusion()
-    assert page.exclusions.item(0).text()=='No folders excluded.'
+    page=SettingsPage();monitored=Mock();page.monitored_changed.connect(monitored)
+    assert page.exclusions.list.item(0).text()=='No folders excluded.'
+    assert page.exclusions.folders()==[]
+    page.exclusions.add()
+    assert page.exclusions.folders()==[str(folder)]
+    monitored.assert_not_called()
+    page.exclusions.list.setCurrentRow(0);assert page.exclusions.remove_button.isEnabled()
+    page.exclusions.remove()
+    assert page.exclusions.folders()==[]
+    page.monitored.add();assert str(folder) in page.monitored.folders()
+    monitored.assert_called_once()
+    db=GuardianDatabase();assert str(folder) in db.get_monitored_folders();db.close()
 
 def test_batch_progress_reports_before_engine_runs(isolated,monkeypatch):
     from core.scanner import GuardianScanner

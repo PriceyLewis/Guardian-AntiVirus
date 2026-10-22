@@ -1,9 +1,13 @@
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from core.paths import DATABASE_DIR
 
 DATABASE = DATABASE_DIR / "guardian.db"
+# User-managed folder lists; names are fixed so they are safe to interpolate.
+FOLDER_TABLES = ("exclusions", "monitored_folders")
+DEFAULT_MONITORED = ("Downloads", "Desktop", "Documents")
 
 
 class GuardianDatabase:
@@ -49,11 +53,20 @@ class GuardianDatabase:
         )
         """)
 
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS exclusions(
-            path TEXT PRIMARY KEY
-        )
-        """)
+        # Installs created before quarantine fingerprints existed lack this column.
+        if "sha256" not in [row[1] for row in cursor.execute("PRAGMA table_info(quarantine)")]:
+            cursor.execute("ALTER TABLE quarantine ADD COLUMN sha256 TEXT")
+
+        seed_monitored = not cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='monitored_folders'"
+        ).fetchone()
+        for table in FOLDER_TABLES:
+            cursor.execute(f"CREATE TABLE IF NOT EXISTS {table}(path TEXT PRIMARY KEY)")
+        if seed_monitored:
+            cursor.executemany(
+                "INSERT OR IGNORE INTO monitored_folders(path) VALUES (?)",
+                [(str(Path.home() / name),) for name in DEFAULT_MONITORED],
+            )
 
         self.conn.commit()
 
@@ -73,18 +86,19 @@ class GuardianDatabase:
 
         self.conn.commit()
 
-    def add_quarantine(self, original, quarantine, virus):
+    def add_quarantine(self, original, quarantine, virus, sha256=None):
         cursor = self.conn.cursor()
 
         cursor.execute("""
         INSERT INTO quarantine
-        (timestamp, original_path, quarantine_path, virus)
-        VALUES (?, ?, ?, ?)
+        (timestamp, original_path, quarantine_path, virus, sha256)
+        VALUES (?, ?, ?, ?, ?)
         """, (
             datetime.now().isoformat(timespec="seconds"),
             original,
             quarantine,
-            virus
+            virus,
+            sha256
         ))
 
         self.conn.commit()
@@ -131,7 +145,8 @@ class GuardianDatabase:
             timestamp,
             original_path,
             quarantine_path,
-            virus
+            virus,
+            sha256
         FROM quarantine
         ORDER BY id DESC
         """)
@@ -161,18 +176,34 @@ class GuardianDatabase:
         cursor.execute("SELECT timestamp, name, scanned, found, errors, cancelled, duration FROM scan_runs ORDER BY id DESC LIMIT 1")
         return cursor.fetchone()
 
+    @staticmethod
+    def _folder_table(table):
+        if table not in FOLDER_TABLES:
+            raise ValueError("Unknown folder list: " + str(table))
+        return table
+
+    def get_folders(self, table):
+        table = self._folder_table(table)
+        return [row[0] for row in self.conn.execute(f"SELECT path FROM {table} ORDER BY path")]
+
+    def add_folder(self, table, path):
+        table = self._folder_table(table)
+        self.conn.execute(f"INSERT OR IGNORE INTO {table}(path) VALUES (?)", (str(path),))
+        self.conn.commit()
+
+    def remove_folder(self, table, path):
+        table = self._folder_table(table)
+        self.conn.execute(f"DELETE FROM {table} WHERE path=?", (str(path),))
+        self.conn.commit()
+
     def get_exclusions(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT path FROM exclusions ORDER BY path")
-        return [row[0] for row in cursor.fetchall()]
+        return self.get_folders("exclusions")
 
     def add_exclusion(self, path):
-        self.conn.execute("INSERT OR IGNORE INTO exclusions(path) VALUES (?)", (str(path),))
-        self.conn.commit()
+        self.add_folder("exclusions", path)
 
-    def remove_exclusion(self, path):
-        self.conn.execute("DELETE FROM exclusions WHERE path=?", (str(path),))
-        self.conn.commit()
+    def get_monitored_folders(self):
+        return self.get_folders("monitored_folders")
 
     def clear_scans(self):
         self.conn.execute("DELETE FROM scans")

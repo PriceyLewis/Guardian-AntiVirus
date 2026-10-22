@@ -132,14 +132,7 @@ class Watcher:
         self.retired.clear()
         self.observer = Observer()
         self.handler = GuardianWatcher()
-        count = 0
-        for name in ("Downloads", "Desktop", "Documents"):
-            folder = Path.home() / name
-            if folder.is_dir():
-                self.observer.schedule(self.handler, str(folder), recursive=True)
-                count += 1
-        if not count:
-            raise RuntimeError("No Downloads, Desktop or Documents folders found")
+        self.schedule()
         try:
             self.observer.start()
         except Exception:
@@ -147,6 +140,26 @@ class Watcher:
             if self.observer.is_alive():
                 self.observer.join()
             raise
+
+    def schedule(self):
+        db = GuardianDatabase()
+        try:
+            folders = [Path(f) for f in db.get_monitored_folders()]
+        finally:
+            db.close()
+        count = 0
+        for folder in folders:
+            if folder.is_dir():
+                self.observer.schedule(self.handler, str(folder), recursive=True)
+                count += 1
+        if not count:
+            raise RuntimeError("None of the monitored folders exist. Add one in Settings.")
+
+    def reschedule(self):
+        """Apply an edited monitored-folder list without restarting the observer."""
+        if self.observer and self.observer.is_alive():
+            self.observer.unschedule_all()
+            self.schedule()
 
     def stop(self, wait=False):
         if self.handler:

@@ -42,6 +42,8 @@ class MainWindow(QMainWindow):
 
         self.allow_close = False
         self.tray_hint_shown = False
+        self.paused_until = None
+        self.setAcceptDrops(True)
 
         self.setWindowTitle("Guardian Antivirus")
         self.resize(1180, 820)
@@ -87,6 +89,8 @@ class MainWindow(QMainWindow):
         self.watcher_error = None
         self.stack.widget(5).runtime_apply = self.apply_settings
         self.stack.widget(5).changed.connect(lambda _: self.refresh_protection())
+        self.stack.widget(5).monitored_changed.connect(self.monitored_folders_changed)
+        self.stack.widget(5).definitions_updated.connect(self.check_definitions)
         try:
             self.apply_settings(load_config())
         except Exception as exc:
@@ -132,6 +136,8 @@ class MainWindow(QMainWindow):
             page.refresh_dashboard()
 
     def apply_settings(self, settings):
+        # An explicit monitoring choice in Settings replaces any tray pause.
+        self.paused_until = None
         try:
             if settings["realtime"]:
                 self.watcher.start()
@@ -144,10 +150,55 @@ class MainWindow(QMainWindow):
             raise
         self.refresh_protection()
 
+    def pause_monitoring(self, minutes=60):
+        if not load_config()["realtime"]:
+            return
+        self.watcher.stop()
+        self.paused_until = datetime.now() + timedelta(minutes=minutes)
+        self.refresh_protection()
+
+    def resume_monitoring(self):
+        self.paused_until = None
+        if load_config()["realtime"]:
+            try:
+                self.watcher.start()
+                self.watcher_error = None
+            except Exception as exc:
+                self.watcher_error = str(exc)
+        self.refresh_protection()
+
+    def monitored_folders_changed(self):
+        try:
+            if self.watcher.observer and self.watcher.observer.is_alive():
+                self.watcher.reschedule()
+            elif load_config()["realtime"] and not self.paused_until:
+                self.watcher.start()
+            self.watcher_error = None
+        except Exception as exc:
+            self.watcher_error = str(exc)
+        self.refresh_protection()
+
+    def dragEnterEvent(self, event):
+        urls = event.mimeData().urls()
+        if urls and all(url.isLocalFile() for url in urls) and not self.stack.widget(0).scan_active:
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        if paths:
+            event.acceptProposedAction()
+            self.sidebar.setCurrentRow(0)
+            self.stack.widget(0).scan_paths(paths)
+
     def refresh_protection(self):
+        if self.paused_until and datetime.now() >= self.paused_until:
+            self.resume_monitoring()
+            return
         active = self.watcher.observer and self.watcher.observer.is_alive() and not self.watcher.handler.stopping.is_set()
         error = self.watcher_error or (self.watcher.handler.last_error if active else None)
         status = "Folder monitoring is running" if active else "Real-time monitoring off"
+        if self.paused_until:
+            status = "Monitoring paused until " + self.paused_until.strftime("%H:%M")
         if error:
             status = "Protection needs attention: " + str(error)
         card = self.stack.widget(0).protection
@@ -156,13 +207,15 @@ class MainWindow(QMainWindow):
         card.status.style().unpolish(card.status)
         card.status.style().polish(card.status)
         card.status.setWordWrap(True)
-        card.realtime.setText("Real-Time Monitoring: " + ("Running" if active else "Off"))
+        card.realtime.setText("Real-Time Monitoring: " + ("Running" if active else ("Paused" if self.paused_until else "Off")))
         dashboard = self.stack.widget(0)
         # Monitoring writes history in the background; keep visible counts current.
         if self.stack.currentIndex() == 0 and not dashboard.scan_active and not dashboard.closing:
             dashboard.refresh_dashboard()
         if hasattr(self, "tray"):
             self.tray.status_action.setText("Scan in progress" if self.stack.widget(0).scan_active else status)
+            self.tray.pause_action.setVisible(bool(active))
+            self.tray.resume_action.setVisible(bool(self.paused_until))
 
     def check_definitions(self):
         if self.definitions_process is not None:

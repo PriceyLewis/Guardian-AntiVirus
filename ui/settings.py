@@ -1,5 +1,6 @@
+import re
 from PySide6.QtCore import Qt, Signal, QSignalBlocker, QProcess, QTimer
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QListWidget, QFileDialog
+from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QListWidget, QFileDialog
 from config import load_config, DEFAULTS
 from core.definitions import describe
 from database.database import GuardianDatabase
@@ -8,8 +9,79 @@ from core.startup import startup_path
 from ui.components import heading, card, label, button
 
 
+class FolderList(QFrame):
+    """Card listing user-managed folders stored in one of the database folder tables."""
+
+    def __init__(self, table, title, description, empty_text, changed):
+        super().__init__()
+        self.setObjectName("card")
+        self.table = table
+        self.empty_text = empty_text
+        self.changed = changed
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        layout.addWidget(label(title, "sectionTitle"))
+        layout.addWidget(label(description))
+        self.list = QListWidget()
+        self.list.setMinimumHeight(90)
+        self.list.setMaximumHeight(150)
+        layout.addWidget(self.list)
+        actions = QHBoxLayout()
+        actions.addWidget(button("Add folder…", self.add))
+        self.remove_button = button("Remove", self.remove)
+        actions.addWidget(self.remove_button)
+        actions.addStretch()
+        layout.addLayout(actions)
+        self.list.itemSelectionChanged.connect(lambda: self.remove_button.setEnabled(bool(self.list.selectedItems())))
+        self.load()
+
+    def load(self):
+        db = GuardianDatabase()
+        try:
+            folders = db.get_folders(self.table)
+        finally:
+            db.close()
+        self.list.clear()
+        self.list.addItems(folders)
+        if not folders:
+            self.list.addItem(self.empty_text)
+            self.list.item(0).setFlags(self.list.item(0).flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
+        self.remove_button.setEnabled(False)
+
+    def folders(self):
+        return [self.list.item(i).text() for i in range(self.list.count()) if self.list.item(i).flags() & Qt.ItemFlag.ItemIsEnabled]
+
+    def add(self):
+        folder = QFileDialog.getExistingDirectory(self, "Choose folder")
+        if not folder:
+            return
+        db = GuardianDatabase()
+        try:
+            db.add_folder(self.table, folder)
+        finally:
+            db.close()
+        self.load()
+        self.changed(self.table, "Added " + folder)
+
+    def remove(self):
+        items = self.list.selectedItems()
+        if not items:
+            return
+        folder = items[0].text()
+        db = GuardianDatabase()
+        try:
+            db.remove_folder(self.table, folder)
+        finally:
+            db.close()
+        self.load()
+        self.changed(self.table, "Removed " + folder)
+
+
 class SettingsPage(QWidget):
     changed = Signal(dict)
+    monitored_changed = Signal()
+    definitions_updated = Signal()
 
     def __init__(self):
         super().__init__()
@@ -21,7 +93,7 @@ class SettingsPage(QWidget):
         layout.setSpacing(18)
         heading(layout, "Settings", "Changes save automatically. Each option explains when it takes effect.")
         for title, description, rows in [
-            ("Protection", "Monitoring covers Downloads, Desktop and Documents when those folders exist.", [
+            ("Protection", "Monitoring covers the folders listed under Monitored folders.", [
                 ("realtime", "Monitor files in real time", "Scan created, changed and moved files. Turning this off stops new monitoring work; an engine call may still be finishing."),
                 ("archives", "Inspect archives", "Apply to subsequent scans. When off, Guardian uses clamscan with archive inspection disabled. Daemon limits still apply when on."),
                 ("scheduled_scan", "Run a daily quick scan", "While Guardian is running, start a quick scan when no scan has run in the last 24 hours.")]),
@@ -38,24 +110,17 @@ class SettingsPage(QWidget):
                 group.addWidget(toggle)
                 group.addWidget(label(detail))
             layout.addWidget(frame)
-        frame, group = card("Excluded folders", "Scans and real-time monitoring skip these folders and everything inside them. Exclude only folders you trust.")
-        self.exclusions = QListWidget()
-        self.exclusions.setMinimumHeight(90)
-        self.exclusions.setMaximumHeight(150)
-        group.addWidget(self.exclusions)
-        actions = QHBoxLayout()
-        actions.addWidget(button("Add folder…", self.add_exclusion))
-        self.remove_exclusion_button = button("Remove", self.remove_exclusion)
-        actions.addWidget(self.remove_exclusion_button)
-        actions.addStretch()
-        group.addLayout(actions)
-        self.exclusions.itemSelectionChanged.connect(lambda: self.remove_exclusion_button.setEnabled(bool(self.exclusions.selectedItems())))
-        layout.addWidget(frame)
-        frame, group = card("Checks & maintenance", "Check the installed command-line engine and desktop integration.")
+        self.monitored = FolderList("monitored_folders", "Monitored folders", "Real-time monitoring watches these folders and their subfolders.", "No folders monitored. Real-time monitoring needs at least one.", self.folders_changed)
+        layout.addWidget(self.monitored)
+        self.exclusions = FolderList("exclusions", "Excluded folders", "Scans and real-time monitoring skip these folders and everything inside them. Exclude only folders you trust.", "No folders excluded.", self.folders_changed)
+        layout.addWidget(self.exclusions)
+        frame, group = card("Checks & maintenance", "Check the installed command-line engine, update virus definitions and test desktop integration.")
         actions = QHBoxLayout()
         self.engine_button = button("Check scan engine", self.check_engine)
+        self.update_button = button("Update definitions", self.update_definitions)
         self.notification_button = button("Test notification", self.test_notification)
         actions.addWidget(self.engine_button)
+        actions.addWidget(self.update_button)
         actions.addWidget(self.notification_button)
         actions.addStretch()
         group.addLayout(actions)
@@ -72,7 +137,6 @@ class SettingsPage(QWidget):
         layout.addLayout(footer)
         layout.addStretch()
         self.load_settings()
-        self.load_exclusions()
         for toggle in self.controls.values():
             toggle.toggled.connect(self.save_settings)
 
@@ -88,43 +152,10 @@ class SettingsPage(QWidget):
         if exists != settings["startup"]:
             self.startup_status.setText("Login entry differs from saved preference. Toggle Start Guardian at login off/on to repair it.")
 
-    def load_exclusions(self):
-        db = GuardianDatabase()
-        try:
-            folders = db.get_exclusions()
-        finally:
-            db.close()
-        self.exclusions.clear()
-        self.exclusions.addItems(folders)
-        if not folders:
-            self.exclusions.addItem("No folders excluded.")
-            self.exclusions.item(0).setFlags(self.exclusions.item(0).flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
-        self.remove_exclusion_button.setEnabled(False)
-
-    def add_exclusion(self):
-        folder = QFileDialog.getExistingDirectory(self, "Choose folder to exclude")
-        if not folder:
-            return
-        db = GuardianDatabase()
-        try:
-            db.add_exclusion(folder)
-        finally:
-            db.close()
-        self.load_exclusions()
-        self.feedback.setText("Excluded " + folder)
-
-    def remove_exclusion(self):
-        items = self.exclusions.selectedItems()
-        if not items:
-            return
-        folder = items[0].text()
-        db = GuardianDatabase()
-        try:
-            db.remove_exclusion(folder)
-        finally:
-            db.close()
-        self.load_exclusions()
-        self.feedback.setText("Removed exclusion " + folder)
+    def folders_changed(self, table, text):
+        self.feedback.setText(text)
+        if table == "monitored_folders":
+            self.monitored_changed.emit()
 
     def save_settings(self):
         settings = {key: toggle.isChecked() for key, toggle in self.controls.items()}
@@ -151,11 +182,15 @@ class SettingsPage(QWidget):
     def check_engine(self):
         self.start_check("clamscan", ["--version"], "engine")
 
+    def update_definitions(self):
+        # Downloads can take minutes on a slow connection.
+        self.start_check("freshclam", ["--stdout"], "update", timeout=5 * 60 * 1000)
+
     def test_notification(self):
         if load_config()["notifications"]:
             self.start_check("notify-send", ["--", "Guardian", "Desktop notifications are enabled."], "notification")
 
-    def start_check(self, program, args, kind):
+    def start_check(self, program, args, kind, timeout=10000):
         if self.process is not None:
             return
         self.check_kind = kind
@@ -168,10 +203,11 @@ class SettingsPage(QWidget):
         self.check_timer.setSingleShot(True)
         self.check_timer.timeout.connect(self.check_timeout)
         self.engine_button.setEnabled(False)
+        self.update_button.setEnabled(False)
         self.notification_button.setEnabled(False)
-        self.check_result.setText("Checking…")
+        self.check_result.setText("Updating definitions…" if kind == "update" else "Checking…")
         self.process.start(program, args)
-        self.check_timer.start(10000)
+        self.check_timer.start(timeout)
 
     def check_timeout(self):
         self.check_timed_out = True
@@ -180,7 +216,8 @@ class SettingsPage(QWidget):
 
     def check_error(self, error):
         if error == QProcess.ProcessError.FailedToStart:
-            self.finish_check("Check unavailable: " + self.process.errorString())
+            missing = "freshclam is not installed. Install your distribution's ClamAV FreshClam package." if self.check_kind == "update" else None
+            self.finish_check(missing or "Check unavailable: " + self.process.errorString())
 
     def check_finished(self, code, exit_status):
         if self.process is None:
@@ -188,6 +225,8 @@ class SettingsPage(QWidget):
         output = bytes(self.process.readAllStandardOutput()).decode(errors="replace").strip()
         if self.check_timed_out:
             text = "Check timed out. Try again or inspect your ClamAV installation."
+        elif self.check_kind == "update":
+            text = self.update_result(code == 0 and exit_status == QProcess.ExitStatus.NormalExit, output)
         elif code != 0 or exit_status != QProcess.ExitStatus.NormalExit:
             text = "Check failed: " + (output or "Desktop service or command returned an error.")
         elif self.check_kind == "engine":
@@ -196,6 +235,18 @@ class SettingsPage(QWidget):
             text = "Notification request sent to your desktop. Check that it appeared."
         self.finish_check(text)
 
+    def update_result(self, success, output):
+        if success:
+            self.definitions_updated.emit()
+            return "Definitions are up to date."
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        detail = next((line for line in lines if "ERROR" in line), lines[-1] if lines else "freshclam returned an error")
+        # Drop freshclam's "ERROR: <timestamp> ->" log prefix.
+        detail = re.sub(r"^ERROR:\s*(?:.*?->\s*)?", "", detail).rstrip(".") + "."
+        # Packaged FreshClam usually runs as a service that owns its log and database.
+        return ("Update failed: " + detail + " If your system runs the FreshClam service, it updates definitions automatically; "
+                "otherwise run 'sudo freshclam' in a terminal.")
+
     def finish_check(self, text):
         self.check_result.setText(text)
         self.check_timer.stop()
@@ -203,6 +254,7 @@ class SettingsPage(QWidget):
         self.process.deleteLater()
         self.process = None
         self.engine_button.setEnabled(True)
+        self.update_button.setEnabled(True)
         self.notification_button.setEnabled(load_config()["notifications"])
 
     def shutdown(self):

@@ -84,3 +84,7 @@ class ScanManager:
     def custom_scan(self, folder, **kwargs):
 
         return self.start_scan([Path(folder)], name="Custom scan", **kwargs)
+
+    def scan_paths(self, paths, **kwargs):
+
+        return self.start_scan([Path(p) for p in paths], name="Custom scan", **kwargs)
