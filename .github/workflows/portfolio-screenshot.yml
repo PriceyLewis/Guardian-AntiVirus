@@ -6,7 +6,7 @@ on:
     paths:
       - "ui/**"
       - "core/**"
-      - "assets/themes/**"
+      - "assets/**"
       - "scripts/capture_portfolio_screenshot.py"
       - ".github/workflows/portfolio-screenshot.yml"
   workflow_dispatch:
@@ -37,7 +37,11 @@ jobs:
       - name: Install application dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1 libopengl0
+          sudo apt-get install -y libegl1 libopengl0 clamav
+          # Real definitions so the screenshot shows a genuine status; a
+          # rate-limited mirror leaves the honest "no database" warning.
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam || true
           python -m pip install -r requirements.txt
 
       - name: Capture real Guardian UI

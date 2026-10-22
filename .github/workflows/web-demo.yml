@@ -217,6 +217,57 @@ jobs:
             if (historyWidth.content > historyWidth.width + 2) throw new Error('History toolbar overflows mobile: ' + JSON.stringify(historyWidth));
             await mobile.close();
 
+            // Release 1.1 parity: pause, chosen files, folder lists, fingerprints, on-access steps and themes.
+            const v11 = await browser.newPage({ viewport: { width: 1280, height: 900 }, colorScheme: 'dark' });
+            const v11Errors = [];
+            v11.on('pageerror', error => v11Errors.push(error.message));
+            await v11.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle' });
+            await v11.evaluate(() => localStorage.clear());
+            await v11.reload({ waitUntil: 'networkidle' });
+            if (await v11.evaluate(() => document.documentElement.dataset.theme) !== 'dark') throw new Error('Demo did not follow a dark system theme');
+            await v11.getByRole('button', { name: 'Pause monitoring for 1 hour' }).click();
+            await v11.getByText(/Monitoring paused until/).waitFor();
+            await v11.getByRole('button', { name: 'Add suspicious sample' }).click();
+            let s11 = await v11.evaluate(() => window.__guardianDemo.getState());
+            if (s11.quarantine !== 0 || !s11.paused) throw new Error('Paused monitoring still quarantined a sample: ' + JSON.stringify(s11));
+            await v11.getByRole('button', { name: 'Resume monitoring' }).click();
+            await v11.locator('.scan-option[data-scan="files"]').click();
+            await v11.waitForFunction(() => !window.__guardianDemo.getState().scanning && window.__guardianDemo.getState().filesProcessed === 2, null, { timeout: 15000 });
+            if (!(await v11.locator('#last-scan-line').textContent()).startsWith('Last scan: Custom scan complete')) throw new Error('Last scan line not updated');
+            await v11.getByRole('button', { name: /Quarantine/ }).click();
+            if (!(await v11.locator('#quarantine-body td').nth(3).getAttribute('title')).startsWith('275a021bbfb6')) throw new Error('Quarantine fingerprint missing');
+            if (!(await v11.locator('#quarantine-usage').textContent()).includes('1 file in quarantine')) throw new Error('Quarantine usage missing');
+            const reportPromise = v11.waitForEvent('download');
+            await v11.getByRole('button', { name: 'Export report' }).click();
+            const report = require('fs').readFileSync(await (await reportPromise).path(), 'utf8');
+            if (!report.includes('SHA-256') || !report.includes('275a021bbfb6')) throw new Error('Quarantine report incomplete');
+            await v11.getByRole('button', { name: 'Settings' }).click();
+            await v11.getByLabel('Folder to exclude').fill('/home/demo/Downloads');
+            await v11.locator('#excluded-add').click();
+            await v11.getByRole('button', { name: 'Remove /home/demo/Downloads' }).first().waitFor();
+            await v11.getByRole('button', { name: 'Overview' }).click();
+            const before = (await v11.evaluate(() => window.__guardianDemo.getState())).filesProcessed;
+            await v11.locator('.scan-option[data-scan="quick"]').click();
+            await v11.waitForFunction(() => !window.__guardianDemo.getState().scanning, null, { timeout: 15000 });
+            s11 = await v11.evaluate(() => window.__guardianDemo.getState());
+            if (s11.filesProcessed - before !== 4) throw new Error('Excluded Downloads files were scanned: ' + JSON.stringify(s11));
+            await v11.getByRole('button', { name: 'Settings' }).click();
+            await v11.getByRole('button', { name: 'Show setup steps' }).click();
+            if (!(await v11.locator('#onaccess-steps').textContent()).includes('OnAccessPrevention yes')) throw new Error('On-access steps missing');
+            await v11.getByLabel('Appearance').selectOption('light');
+            if (await v11.evaluate(() => document.documentElement.dataset.theme) !== 'light') throw new Error('Light theme not applied');
+            await v11.getByRole('button', { name: 'Overview' }).click();
+            await v11.screenshot({ path: 'guardian-web-demo-light.png', fullPage: true });
+            const v11Width = await v11.evaluate(() => ({ width: innerWidth, content: document.documentElement.scrollWidth }));
+            if (v11Width.content > v11Width.width + 2) throw new Error('Demo overflows horizontally: ' + JSON.stringify(v11Width));
+            if (v11Errors.length) throw new Error('Guardian 1.1 demo page errors: ' + v11Errors.join(' | '));
+            await v11.setViewportSize({ width: 360, height: 780 });
+            await v11.getByRole('button', { name: 'Settings' }).click();
+            const settingsWidth = await v11.evaluate(() => ({ width: innerWidth, content: document.documentElement.scrollWidth }));
+            if (settingsWidth.content > settingsWidth.width + 2) throw new Error('Settings overflow on mobile: ' + JSON.stringify(settingsWidth));
+            await v11.screenshot({ path: 'guardian-settings-mobile.png', fullPage: true });
+            await v11.close();
+
             await browser.close();
           })().catch(error => {
             console.error(error);
@@ -233,6 +284,8 @@ jobs:
             guardian-web-demo.png
             guardian-web-demo-mobile.png
             guardian-history-mobile.png
+            guardian-web-demo-light.png
+            guardian-settings-mobile.png
           if-no-files-found: warn
           retention-days: 7
 
