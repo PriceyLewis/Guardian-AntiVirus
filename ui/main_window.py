@@ -1,7 +1,9 @@
+from datetime import datetime, timedelta
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QSystemTrayIcon
 from config import load_config
+from core.definitions import describe
 from core.watcher import Watcher
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -92,6 +94,14 @@ class MainWindow(QMainWindow):
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_protection)
         self.timer.start(3000)
+        self.definitions_process = None
+        self.definitions_timer = QTimer(self)
+        self.definitions_timer.timeout.connect(self.check_definitions)
+        self.definitions_timer.start(6 * 60 * 60 * 1000)
+        self.check_definitions()
+        self.schedule_timer = QTimer(self)
+        self.schedule_timer.timeout.connect(self.run_scheduled_scan)
+        self.schedule_timer.start(60 * 1000)
         self.sidebar.setCurrentRow(0)
 
         sidebar_layout = QVBoxLayout()
@@ -154,8 +164,52 @@ class MainWindow(QMainWindow):
         if hasattr(self, "tray"):
             self.tray.status_action.setText("Scan in progress" if self.stack.widget(0).scan_active else status)
 
+    def check_definitions(self):
+        if self.definitions_process is not None:
+            return
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.finished.connect(lambda *_: self.definitions_checked(bytes(process.readAllStandardOutput()).decode(errors="replace")))
+        process.errorOccurred.connect(self.definitions_error)
+        self.definitions_process = process
+        process.start("clamscan", ["--version"])
+
+    def definitions_error(self, error):
+        # finished is not emitted when clamscan is missing.
+        if error == QProcess.ProcessError.FailedToStart:
+            self.definitions_checked("")
+
+    def definitions_checked(self, output):
+        if self.definitions_process is None:
+            return
+        self.definitions_process.deleteLater()
+        self.definitions_process = None
+        text, attention = describe(output)
+        label = self.stack.widget(0).protection.definitions
+        label.setText(text)
+        label.setProperty("attention", attention)
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def run_scheduled_scan(self):
+        dashboard = self.stack.widget(0)
+        if not load_config()["scheduled_scan"] or dashboard.scan_active or dashboard.closing:
+            return
+        # Any run counts, so cancelling a scheduled scan postpones it to tomorrow.
+        run = dashboard.db.last_scan_run()
+        if run and datetime.now() - datetime.fromisoformat(run[0]) < timedelta(days=1):
+            return
+        dashboard.quick_scan()
+
     def shutdown(self):
         self.timer.stop()
+        self.definitions_timer.stop()
+        self.schedule_timer.stop()
+        if self.definitions_process is not None:
+            process, self.definitions_process = self.definitions_process, None
+            process.blockSignals(True)
+            process.kill()
+            process.waitForFinished(1000)
         self.stack.widget(0).closing = True
         self.stack.widget(5).shutdown()
         self.watcher.stop(wait=True)

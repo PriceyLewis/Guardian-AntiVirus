@@ -14,7 +14,7 @@ def drain(app, predicate, timeout=3):
         time.sleep(.005)
     assert predicate()
 
-@pytest.mark.parametrize('key', ['realtime','archives','notifications','startup','close_to_tray'])
+@pytest.mark.parametrize('key', ['realtime','archives','notifications','startup','close_to_tray','scheduled_scan'])
 def test_every_setting_persists_both_states_and_reopens(isolated,app,key):
     from config import load_config
     from ui.settings import SettingsPage
@@ -316,3 +316,115 @@ def test_login_entry_starts_minimized(isolated):
     from core.startup import set_startup,startup_path
     set_startup(True)
     assert '--minimized' in startup_path().read_text()
+
+@pytest.mark.parametrize('output,expected,attention',[
+    ('ClamAV 1.5.4/27500/Tue Oct 20 08:00:00 2026','definitions 27500, updated 2 days ago',False),
+    ('ClamAV 1.5.4/27400/Thu Oct  1 08:00:00 2026','out of date',True),
+    ('ClamAV 1.5.4','no official signature database',True),
+    ('','ClamAV not found',True),
+])
+def test_definitions_freshness(output,expected,attention):
+    from datetime import datetime
+    from core.definitions import describe
+    text,needs=describe(output,now=datetime(2026,10,22,12,0))
+    assert expected in text and needs is attention
+
+def test_watcher_waits_for_writes_and_skips_partial_downloads(isolated,monkeypatch):
+    import core.watcher as watcher_module
+    from core.watcher import GuardianWatcher
+    monkeypatch.setattr(watcher_module,'SETTLE_SECONDS',.2)
+    scanned=[]
+    monkeypatch.setattr('core.watcher.GuardianScanner',lambda:SimpleNamespace(scan_file=lambda p:scanned.append(p) or {'status':'clean','virus':None}))
+    file=isolated/'download.bin';file.write_text('data')
+    watcher=GuardianWatcher()
+    try:
+        for _ in range(5):watcher.queue(file)
+        watcher.queue(isolated/'video.mp4.crdownload')
+        deadline=time.monotonic()+3
+        while not scanned and time.monotonic()<deadline:time.sleep(.02)
+        time.sleep(.5)
+        assert scanned==[file]
+    finally:
+        watcher.close()
+    assert not watcher.thread.is_alive()
+
+def test_exclusions_apply_to_scans_and_monitoring(isolated,monkeypatch,app):
+    from core.scan_worker import ScanWorker
+    from core.watcher import GuardianWatcher
+    from database.database import GuardianDatabase
+    from test_guardian import engine
+    folder=isolated/'files';(folder/'vm').mkdir(parents=True)
+    (folder/'vm'/'disk.img').write_text('large');(folder/'doc').write_text('fixture')
+    db=GuardianDatabase();db.add_exclusion(folder/'vm');db.close()
+    scan=Mock(return_value={'status':'clean','virus':None})
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(scan))
+    worker=ScanWorker([folder]);done=[]
+    worker.finished.connect(done.append);worker.run()
+    assert done==[1] and scan.call_args.args[0].name=='doc'
+    monkeypatch.setattr('core.watcher.GuardianScanner',lambda:SimpleNamespace(scan_file=scan))
+    GuardianWatcher().scan(folder/'vm'/'disk.img')
+    assert scan.call_count==1
+
+def test_scan_runs_persist_last_scan_and_duration(isolated,monkeypatch,app):
+    from ui.dashboard import DashboardPage
+    from test_guardian import engine
+    folder=isolated/'files';folder.mkdir();(folder/'file').write_text('fixture')
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(lambda p:{'status':'clean','virus':None}))
+    page=DashboardPage()
+    assert page.protection.last_scan.text()=='No scans yet'
+    page.start_scan(lambda **kw:page.scan_manager.custom_scan(folder,**kw))
+    drain(app,lambda:not page.scan_active)
+    assert 'Took' in page.result_text.text()
+    page.scan_manager.shutdown();page.db.close()
+    reopened=DashboardPage()
+    assert reopened.protection.last_scan.text().startswith('Last scan: Custom scan complete')
+    reopened.db.close()
+
+def test_scheduled_scan_runs_daily_only_when_enabled(isolated,app):
+    from config import load_config,save_config
+    from ui.main_window import MainWindow
+    window=MainWindow();dash=window.stack.widget(0);dash.quick_scan=Mock()
+    try:
+        window.run_scheduled_scan();dash.quick_scan.assert_not_called()
+        save_config(dict(load_config(),scheduled_scan=True))
+        window.run_scheduled_scan();dash.quick_scan.assert_called_once()
+        dash.db.add_scan_run('Quick scan',1,0,0,True,1.0)
+        window.run_scheduled_scan();dash.quick_scan.assert_called_once()
+        dash.db.conn.execute("UPDATE scan_runs SET timestamp='2000-01-01T00:00:00'");dash.db.conn.commit()
+        window.run_scheduled_scan();assert dash.quick_scan.call_count==2
+    finally:
+        window.shutdown()
+
+def test_settings_exclusion_list(isolated,app,monkeypatch):
+    from ui.settings import SettingsPage
+    from PySide6.QtWidgets import QFileDialog
+    folder=isolated/'trusted';folder.mkdir()
+    monkeypatch.setattr(QFileDialog,'getExistingDirectory',lambda *a:str(folder))
+    page=SettingsPage()
+    assert page.exclusions.item(0).text()=='No folders excluded.'
+    page.add_exclusion()
+    assert page.exclusions.item(0).text()==str(folder)
+    page.exclusions.setCurrentRow(0);assert page.remove_exclusion_button.isEnabled()
+    page.remove_exclusion()
+    assert page.exclusions.item(0).text()=='No folders excluded.'
+
+def test_batch_progress_reports_before_engine_runs(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/'one',isolated/'two']
+    for file in files:file.write_text('x')
+    started=[]
+    def run(args,**kw):
+        assert started
+        return SimpleNamespace(returncode=0,stdout='',stderr='')
+    monkeypatch.setattr('core.scanner.subprocess.run',run)
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
+    list(scanner.scan_files(files,started=started.append))
+    assert started==[files]
+
+def test_shutdown_during_running_checks(isolated,app):
+    import sys
+    from ui.main_window import MainWindow
+    window=MainWindow();settings=window.stack.widget(5)
+    settings.start_check(sys.executable,['-c','import time; time.sleep(10)'],'engine')
+    window.shutdown()
+    assert settings.process is None and window.definitions_process is None

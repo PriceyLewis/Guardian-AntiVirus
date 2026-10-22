@@ -117,6 +117,11 @@ The implementation keeps scanning, monitoring, persistence, quarantine and notif
 - Definition freshness is not falsely asserted by the app.
 - CSV export escapes spreadsheet-formula prefixes in exported values.
 - History can be cleared after confirmation; quarantined files are unaffected.
+- Real-time monitoring waits until a file has been quiet for a second before scanning it, on its own thread, and ignores browser partial-download files (`.part`, `.crdownload`, …) until they are renamed.
+- Overview shows the ClamAV signature version and age from `clamscan --version`, and warns when definitions are missing or more than 7 days old.
+- Each scan run is recorded with its duration, so the last scan survives restarts.
+- Excluded folders (Settings) are skipped by scans and monitoring.
+- An optional daily Quick scan runs while Guardian is open if no scan has run in 24 hours; cancelling it postpones it to the next day.
 - Only one Guardian instance runs per data directory, so monitors never duplicate.
 - The login entry starts Guardian minimised to the tray (`--minimized`) when a tray is available.
 
@@ -137,6 +142,7 @@ Regression coverage includes:
 - worker failures;
 - settings persistence and rollback;
 - batched clamscan parsing and monitoring self-exclusion;
+- monitoring debounce, exclusions, definitions freshness and scheduled scans;
 - navigation and scan lifecycle.
 
 Scanner tests use controlled engine responses, so they verify application behaviour rather than claiming to prove live antivirus detection.

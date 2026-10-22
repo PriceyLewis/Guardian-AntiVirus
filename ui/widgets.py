@@ -55,8 +55,9 @@ class ProtectionCard(Card):
         self.status.setObjectName("status")
 
         self.realtime = QLabel("Real-Time Monitoring: Checking")
-        self.definitions = QLabel("ClamAV definitions: managed by your system. Check engine details in Settings.")
-        self.last_scan = QLabel("No scan completed in this session")
+        self.definitions = QLabel("Checking ClamAV definitions…")
+        self.definitions.setWordWrap(True)
+        self.last_scan = QLabel("No scans yet")
 
         for label in (
             self.realtime,

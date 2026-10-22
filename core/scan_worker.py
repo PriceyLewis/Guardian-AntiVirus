@@ -1,8 +1,9 @@
 import os
+import time
 from pathlib import Path
 from threading import Event
 from PySide6.QtCore import QObject, Signal
-from core.paths import QUARANTINE, is_guardian_storage
+from core.paths import QUARANTINE, is_excluded, is_guardian_storage
 from core.scanner import GuardianScanner
 from core.quarantine import QuarantineManager
 from core.notifier import GuardianNotifier
@@ -17,15 +18,17 @@ class ScanWorker(QObject):
     error = Signal(str)
     summary = Signal(dict)
 
-    def __init__(self, folders):
+    def __init__(self, folders, name="Scan"):
         super().__init__()
         self.folders = folders
+        self.name = name
         self.cancelled = Event()
 
     def run(self):
         db = None
         scanned = 0
         totals = {"clean": 0, "found": 0, "errors": 0, "quarantined": 0}
+        began = time.monotonic()
         def report_error(message):
             totals["errors"] += 1
             self.error.emit(message)
@@ -33,6 +36,7 @@ class ScanWorker(QObject):
             scanner = GuardianScanner()
             db = GuardianDatabase()
             quarantine = QuarantineManager()
+            exclusions = db.get_exclusions()
             files = set()
             def walk_error(exc):
                 report_error(str(exc))
@@ -44,7 +48,7 @@ class ScanWorker(QObject):
                     if self.cancelled.is_set():
                         return
                     base = Path(directory)
-                    if is_guardian_storage(base, QUARANTINE):
+                    if is_guardian_storage(base, QUARANTINE) or is_excluded(base, exclusions):
                         dirs[:] = []
                         continue
                     dirs[:] = [d for d in dirs if not (base / d).is_symlink()]
@@ -53,8 +57,10 @@ class ScanWorker(QObject):
                         if not path.is_symlink() and path.is_file() and not is_guardian_storage(path, QUARANTINE):
                             files.add(path)
             self.maximum.emit(len(files))
-            for file, result in scanner.scan_files(sorted(files)):
-                self.current_file.emit(str(file))
+            def started(paths):
+                more = f"  (+{len(paths) - 1:,} more in this batch)" if len(paths) > 1 else ""
+                self.current_file.emit(str(paths[0]) + more)
+            for file, result in scanner.scan_files(sorted(files), started=started):
                 status, virus = result["status"], result.get("virus")
                 db.add_scan(str(file), status, virus)
                 if status in ("clean", "found"):
@@ -76,7 +82,13 @@ class ScanWorker(QObject):
         except Exception as exc:
             report_error(str(exc))
         finally:
+            duration = round(time.monotonic() - began, 1)
+            cancelled = self.cancelled.is_set()
             if db:
+                try:
+                    db.add_scan_run(self.name, scanned, totals["found"], totals["errors"], cancelled, duration)
+                except Exception as exc:
+                    report_error(f"Could not record scan: {exc}")
                 db.close()
-            self.summary.emit(dict(totals, scanned=scanned, cancelled=self.cancelled.is_set()))
+            self.summary.emit(dict(totals, scanned=scanned, cancelled=cancelled, duration=duration))
             self.finished.emit(scanned)

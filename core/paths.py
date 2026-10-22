@@ -16,3 +16,9 @@ def is_guardian_storage(path, quarantine=QUARANTINE):
     if any(path.is_relative_to(Path(folder).resolve()) for folder in (quarantine, DATABASE_DIR)):
         return True
     return path.parent == DATA.resolve() and (path.name == "config.json" or path.name.startswith((".config-", "guardian.lock")))
+
+
+def is_excluded(path, exclusions):
+    """True when path is inside one of the user's excluded folders."""
+    path = Path(path).resolve()
+    return any(path.is_relative_to(Path(folder).resolve()) for folder in exclusions)

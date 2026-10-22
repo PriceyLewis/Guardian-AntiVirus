@@ -1,6 +1,8 @@
-from PySide6.QtCore import Signal, QSignalBlocker, QProcess, QTimer
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox
+from PySide6.QtCore import Qt, Signal, QSignalBlocker, QProcess, QTimer
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QListWidget, QFileDialog
 from config import load_config, DEFAULTS
+from core.definitions import describe
+from database.database import GuardianDatabase
 from core.preferences import apply_preferences
 from core.startup import startup_path
 from ui.components import heading, card, label, button
@@ -21,7 +23,8 @@ class SettingsPage(QWidget):
         for title, description, rows in [
             ("Protection", "Monitoring covers Downloads, Desktop and Documents when those folders exist.", [
                 ("realtime", "Monitor files in real time", "Scan created, changed and moved files. Turning this off stops new monitoring work; an engine call may still be finishing."),
-                ("archives", "Inspect archives", "Apply to subsequent scans. When off, Guardian uses clamscan with archive inspection disabled. Daemon limits still apply when on.")]),
+                ("archives", "Inspect archives", "Apply to subsequent scans. When off, Guardian uses clamscan with archive inspection disabled. Daemon limits still apply when on."),
+                ("scheduled_scan", "Run a daily quick scan", "While Guardian is running, start a quick scan when no scan has run in the last 24 hours.")]),
             ("Desktop", "Control how Guardian fits into your desktop.", [
                 ("notifications", "Show desktop notifications", "Receive a notification when a threat is quarantined. Requires a working desktop notification service."),
                 ("startup", "Start Guardian at login", "Create a login entry for this installation and Python environment. Takes effect at your next desktop login."),
@@ -35,6 +38,19 @@ class SettingsPage(QWidget):
                 group.addWidget(toggle)
                 group.addWidget(label(detail))
             layout.addWidget(frame)
+        frame, group = card("Excluded folders", "Scans and real-time monitoring skip these folders and everything inside them. Exclude only folders you trust.")
+        self.exclusions = QListWidget()
+        self.exclusions.setMinimumHeight(90)
+        self.exclusions.setMaximumHeight(150)
+        group.addWidget(self.exclusions)
+        actions = QHBoxLayout()
+        actions.addWidget(button("Add folder…", self.add_exclusion))
+        self.remove_exclusion_button = button("Remove", self.remove_exclusion)
+        actions.addWidget(self.remove_exclusion_button)
+        actions.addStretch()
+        group.addLayout(actions)
+        self.exclusions.itemSelectionChanged.connect(lambda: self.remove_exclusion_button.setEnabled(bool(self.exclusions.selectedItems())))
+        layout.addWidget(frame)
         frame, group = card("Checks & maintenance", "Check the installed command-line engine and desktop integration.")
         actions = QHBoxLayout()
         self.engine_button = button("Check scan engine", self.check_engine)
@@ -56,6 +72,7 @@ class SettingsPage(QWidget):
         layout.addLayout(footer)
         layout.addStretch()
         self.load_settings()
+        self.load_exclusions()
         for toggle in self.controls.values():
             toggle.toggled.connect(self.save_settings)
 
@@ -70,6 +87,44 @@ class SettingsPage(QWidget):
         self.startup_status.setText("Login entry: " + ("installed" if exists else "not installed"))
         if exists != settings["startup"]:
             self.startup_status.setText("Login entry differs from saved preference. Toggle Start Guardian at login off/on to repair it.")
+
+    def load_exclusions(self):
+        db = GuardianDatabase()
+        try:
+            folders = db.get_exclusions()
+        finally:
+            db.close()
+        self.exclusions.clear()
+        self.exclusions.addItems(folders)
+        if not folders:
+            self.exclusions.addItem("No folders excluded.")
+            self.exclusions.item(0).setFlags(self.exclusions.item(0).flags() & ~Qt.ItemFlag.ItemIsSelectable & ~Qt.ItemFlag.ItemIsEnabled)
+        self.remove_exclusion_button.setEnabled(False)
+
+    def add_exclusion(self):
+        folder = QFileDialog.getExistingDirectory(self, "Choose folder to exclude")
+        if not folder:
+            return
+        db = GuardianDatabase()
+        try:
+            db.add_exclusion(folder)
+        finally:
+            db.close()
+        self.load_exclusions()
+        self.feedback.setText("Excluded " + folder)
+
+    def remove_exclusion(self):
+        items = self.exclusions.selectedItems()
+        if not items:
+            return
+        folder = items[0].text()
+        db = GuardianDatabase()
+        try:
+            db.remove_exclusion(folder)
+        finally:
+            db.close()
+        self.load_exclusions()
+        self.feedback.setText("Removed exclusion " + folder)
 
     def save_settings(self):
         settings = {key: toggle.isChecked() for key, toggle in self.controls.items()}
@@ -136,7 +191,7 @@ class SettingsPage(QWidget):
         elif code != 0 or exit_status != QProcess.ExitStatus.NormalExit:
             text = "Check failed: " + (output or "Desktop service or command returned an error.")
         elif self.check_kind == "engine":
-            text = (output or "ClamAV command available") + " — Version check only; detection and definition freshness are not verified."
+            text = describe(output)[0] + " — Version check only; detection is not verified."
         else:
             text = "Notification request sent to your desktop. Check that it appeared."
         self.finish_check(text)
@@ -153,7 +208,7 @@ class SettingsPage(QWidget):
     def shutdown(self):
         if self.process:
             self.check_timer.stop()
-            self.process.disconnect()
+            self.process.blockSignals(True)
             self.process.kill()
             self.process.waitForFinished(1000)
             self.process.deleteLater()

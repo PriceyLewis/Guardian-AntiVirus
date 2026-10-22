@@ -55,24 +55,31 @@ class GuardianScanner:
         except (OSError, subprocess.TimeoutExpired) as exc:
             return {"status": "error", "virus": str(exc)}
 
-    def scan_files(self, filepaths):
-        """Yield (path, result) pairs, batching clamscan runs when the daemon is unavailable."""
+    def scan_files(self, filepaths, started=None):
+        """Yield (path, result) pairs, batching clamscan runs when the daemon is unavailable.
+
+        started, if given, receives the list of paths before each engine call.
+        """
         archives = load_config()["archives"]
         batch = []
         for path in (Path(p).absolute() for p in filepaths):
             # Newlines would make clamscan's line-based output ambiguous.
             if (self.clamd and archives) or "\n" in str(path):
-                yield from self._scan_batch(batch, archives)
+                yield from self._scan_batch(batch, archives, started)
                 batch = []
+                if started:
+                    started([path])
                 yield path, self.scan_file(path)
                 continue
             batch.append(path)
             if len(batch) >= CLI_BATCH:
-                yield from self._scan_batch(batch, archives)
+                yield from self._scan_batch(batch, archives, started)
                 batch = []
-        yield from self._scan_batch(batch, archives)
+        yield from self._scan_batch(batch, archives, started)
 
-    def _scan_batch(self, paths, archives):
+    def _scan_batch(self, paths, archives, started=None):
+        if paths and started:
+            started(paths)
         if len(paths) <= 1:
             for path in paths:
                 yield path, self.scan_file(path)

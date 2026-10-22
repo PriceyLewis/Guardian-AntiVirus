@@ -23,7 +23,7 @@ def isolated(tmp_path, monkeypatch):
 
 def engine(scan):
     """Scanner double exposing both the per-file and batch interfaces."""
-    return SimpleNamespace(scan_file=scan, scan_files=lambda paths:((p,scan(p)) for p in paths))
+    return SimpleNamespace(scan_file=scan, scan_files=lambda paths,started=None:((p,scan(p)) for p in paths))
 
 @pytest.fixture(scope='session')
 def app():

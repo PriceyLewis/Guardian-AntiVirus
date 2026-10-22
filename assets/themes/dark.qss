@@ -8,7 +8,7 @@ QLabel#muted, QLabel#subtitle { color: #9aaac1; font-size: 12px; }
 QLabel#feedback { color: #8fdbbe; }
 QLabel#warning { color: #edba73; }
 QLabel#status { color: #91bce9; font-size: 21px; font-weight: bold; }
-QLabel#status[attention="true"] { color: #edba73; }
+QLabel#status[attention="true"], QLabel#subtitle[attention="true"] { color: #edba73; }
 QLabel#cardTitle { color: #9aaac1; font-size: 12px; }
 QLabel#cardValue { color: #f6f9ff; font-size: 30px; font-weight: bold; }
 QFrame#card { background: #18212e; border: 1px solid #293548; border-radius: 12px; }

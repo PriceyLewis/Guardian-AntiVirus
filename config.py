@@ -4,7 +4,7 @@ import tempfile
 from core.paths import DATA
 
 CONFIG = DATA / "config.json"
-DEFAULTS = {"realtime": True, "notifications": True, "archives": True, "startup": False, "close_to_tray": True}
+DEFAULTS = {"realtime": True, "notifications": True, "archives": True, "startup": False, "close_to_tray": True, "scheduled_scan": False}
 
 
 def load_config():

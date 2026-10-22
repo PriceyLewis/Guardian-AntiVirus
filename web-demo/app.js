@@ -1,4 +1,4 @@
-const DEFAULT_SETTINGS={realtime:true,archives:true,notifications:true,startup:false,close_to_tray:true};
+const DEFAULT_SETTINGS={realtime:true,archives:true,notifications:true,startup:false,close_to_tray:true,scheduled_scan:false};
 const FILES=[
 {path:"/home/demo/Downloads/coursework-notes.pdf",threat:null},
 {path:"/home/demo/Desktop/project-plan.txt",threat:null},

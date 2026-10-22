@@ -74,6 +74,12 @@ class DashboardPage(QWidget):
         self.threats_card.set_value(self.db.get_threat_count())
         self.quarantine_card.set_value(self.db.get_quarantine_count())
         self.activity.update_activity(self.db.recent_scans(5))
+        run = self.db.last_scan_run()
+        if run:
+            timestamp, name, scanned, found, errors, cancelled, duration = run
+            state = "cancelled" if cancelled else ("finished with errors" if errors else "complete")
+            when = datetime.fromisoformat(timestamp).strftime("%d %b, %H:%M")
+            self.protection.last_scan.setText(f"Last scan: {name} {state} · {when} · {scanned:,} files in {format_duration(duration)}")
 
     def start_scan(self, scan_function, name="Scan"):
         if self.scan_active or (self.scan_manager.thread and self.scan_manager.thread.isRunning()):
@@ -150,7 +156,18 @@ class DashboardPage(QWidget):
         self.current_file.setText("No files checked." if not scanned else f"{scanned:,} files processed")
         self.result_text.show()
         self.error_text.setVisible(bool(self.scan_errors))
-        self.result_text.setText(f"Clean: {summary['clean']}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}   •   Errors: {summary['errors']}")
+        took = f"   •   Took {format_duration(summary['duration'])}" if "duration" in summary else ""
+        self.result_text.setText(f"Clean: {summary['clean']}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}   •   Errors: {summary['errors']}{took}")
         self.error_text.setText("\n".join(self.scan_errors))
-        self.protection.last_scan.setText(state + " · " + datetime.now().strftime("%d %b, %H:%M"))
         self.refresh_dashboard()
+
+
+def format_duration(seconds):
+    seconds = int(round(seconds or 0))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"

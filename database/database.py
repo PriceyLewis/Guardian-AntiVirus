@@ -36,6 +36,25 @@ class GuardianDatabase:
         )
         """)
 
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS scan_runs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            name TEXT,
+            scanned INTEGER,
+            found INTEGER,
+            errors INTEGER,
+            cancelled INTEGER,
+            duration REAL
+        )
+        """)
+
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS exclusions(
+            path TEXT PRIMARY KEY
+        )
+        """)
+
         self.conn.commit()
 
     def add_scan(self, filepath, status, virus=None):
@@ -127,6 +146,32 @@ class GuardianDatabase:
             (quarantine_id,)
         )
 
+        self.conn.commit()
+
+    def add_scan_run(self, name, scanned, found, errors, cancelled, duration):
+        self.conn.execute("""
+        INSERT INTO scan_runs
+        (timestamp, name, scanned, found, errors, cancelled, duration)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (datetime.now().isoformat(timespec="seconds"), name, scanned, found, errors, int(cancelled), duration))
+        self.conn.commit()
+
+    def last_scan_run(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT timestamp, name, scanned, found, errors, cancelled, duration FROM scan_runs ORDER BY id DESC LIMIT 1")
+        return cursor.fetchone()
+
+    def get_exclusions(self):
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT path FROM exclusions ORDER BY path")
+        return [row[0] for row in cursor.fetchall()]
+
+    def add_exclusion(self, path):
+        self.conn.execute("INSERT OR IGNORE INTO exclusions(path) VALUES (?)", (str(path),))
+        self.conn.commit()
+
+    def remove_exclusion(self, path):
+        self.conn.execute("DELETE FROM exclusions WHERE path=?", (str(path),))
         self.conn.commit()
 
     def clear_scans(self):
