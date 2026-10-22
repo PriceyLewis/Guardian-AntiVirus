@@ -6,6 +6,7 @@ from watchdog.observers import Observer
 from core.scanner import GuardianScanner
 from core.quarantine import QuarantineManager
 from core.notifier import GuardianNotifier
+from core.log import log
 from database.database import GuardianDatabase
 from core.paths import QUARANTINE, is_excluded, is_guardian_storage
 
@@ -101,15 +102,18 @@ class GuardianWatcher(FileSystemEventHandler):
             db.add_scan(str(file.absolute()), result["status"], result.get("virus"))
             if result["status"] == "error":
                 self.last_error = result.get("virus") or "Scan failed"
+                log.warning("Monitoring could not scan %s: %s", file, self.last_error)
             else:
                 if len(self.scanned) > 10000:
                     self.scanned.clear()
                 self.scanned[file] = signature
             if result["status"] == "found":
+                log.warning("Real-time detection %s in %s", result.get("virus"), file)
                 self.quarantine.quarantine(file, result.get("virus"))
                 GuardianNotifier.notify("Guardian", f"Threat quarantined: {file.name}")
         except Exception as exc:
             self.last_error = str(exc)
+            log.exception("Monitoring failed for %s", file)
         finally:
             if db:
                 db.close()

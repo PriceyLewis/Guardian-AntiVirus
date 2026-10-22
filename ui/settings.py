@@ -1,8 +1,11 @@
 import re
-from PySide6.QtCore import Qt, Signal, QSignalBlocker, QProcess, QTimer
-from PySide6.QtWidgets import QWidget, QFrame, QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QListWidget, QFileDialog
+from PySide6.QtCore import Qt, Signal, QSignalBlocker, QProcess, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QListWidget, QFileDialog, QComboBox, QGridLayout
 from config import load_config, DEFAULTS
+from core import onaccess
 from core.definitions import describe
+from core.paths import LOGS
 from database.database import GuardianDatabase
 from core.preferences import apply_preferences
 from core.startup import startup_path
@@ -88,41 +91,70 @@ class SettingsPage(QWidget):
         self.runtime_apply = None
         self.process = None
         self.controls = {}
+        self.choices = {}
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(18)
         heading(layout, "Settings", "Changes save automatically. Each option explains when it takes effect.")
+        hours = [("Any time", -1)] + [(f"{hour:02d}:00", hour) for hour in range(24)]
         for title, description, rows in [
             ("Protection", "Monitoring covers the folders listed under Monitored folders.", [
                 ("realtime", "Monitor files in real time", "Scan created, changed and moved files. Turning this off stops new monitoring work; an engine call may still be finishing."),
-                ("archives", "Inspect archives", "Apply to subsequent scans. When off, Guardian uses clamscan with archive inspection disabled. Daemon limits still apply when on."),
-                ("scheduled_scan", "Run a daily quick scan", "While Guardian is running, start a quick scan when no scan has run in the last 24 hours.")]),
+                ("archives", "Inspect archives", "Apply to subsequent scans. When off, Guardian uses clamscan with archive inspection disabled. Daemon limits still apply when on.")]),
+            ("Schedule", "Scheduled scans run while Guardian is open, including when it is hidden in the tray.", [
+                ("scheduled_scan", "Run a daily quick scan", "Start a quick scan once a day."),
+                ("weekly_home_scan", "Run a weekly home scan", "Check your whole home folder once a week. This can take a long time on large folders."),
+                ("scan_hour", "Preferred time", "Scheduled scans wait until this time of day. If Guardian was closed then, they run when it next opens.", hours)]),
+            ("Quarantine", "Quarantined files stay isolated until you restore or delete them.", [
+                ("quarantine_retention_days", "Automatically delete quarantined files", "Old quarantined files are permanently deleted once they reach this age.", [("Never", 0), ("After 30 days", 30), ("After 90 days", 90)])]),
             ("Desktop", "Control how Guardian fits into your desktop.", [
                 ("notifications", "Show desktop notifications", "Receive a notification when a threat is quarantined. Requires a working desktop notification service."),
                 ("startup", "Start Guardian at login", "Create a login entry for this installation and Python environment. Takes effect at your next desktop login."),
-                ("close_to_tray", "Keep running when the window closes", "Hide to the system tray when available. Otherwise closing the window exits Guardian.")])]:
+                ("close_to_tray", "Keep running when the window closes", "Hide to the system tray when available. Otherwise closing the window exits Guardian."),
+                ("theme", "Appearance", "Follow your desktop's light or dark preference, or choose one.", [("Match system", "system"), ("Dark", "dark"), ("Light", "light")])])]:
             frame, group = card(title, description)
-            for key, text, detail in rows:
-                toggle = QCheckBox(text)
-                toggle.setAccessibleDescription(detail)
-                self.controls[key] = toggle
-                setattr(self, key, toggle)
-                group.addWidget(toggle)
+            for key, text, detail, *options in rows:
+                if options:
+                    control = QComboBox()
+                    for option, value in options[0]:
+                        control.addItem(option, value)
+                    control.setAccessibleName(text)
+                    control.setAccessibleDescription(detail)
+                    row = QHBoxLayout()
+                    row.addWidget(label(text, "settingLabel"))
+                    row.addWidget(control)
+                    row.addStretch()
+                    group.addLayout(row)
+                    self.choices[key] = control
+                else:
+                    control = QCheckBox(text)
+                    control.setAccessibleDescription(detail)
+                    group.addWidget(control)
+                    self.controls[key] = control
+                setattr(self, key, control)
                 group.addWidget(label(detail))
             layout.addWidget(frame)
         self.monitored = FolderList("monitored_folders", "Monitored folders", "Real-time monitoring watches these folders and their subfolders.", "No folders monitored. Real-time monitoring needs at least one.", self.folders_changed)
         layout.addWidget(self.monitored)
         self.exclusions = FolderList("exclusions", "Excluded folders", "Scans and real-time monitoring skip these folders and everything inside them. Exclude only folders you trust.", "No folders excluded.", self.folders_changed)
         layout.addWidget(self.exclusions)
-        frame, group = card("Checks & maintenance", "Check the installed command-line engine, update virus definitions and test desktop integration.")
+        frame, group = card("Block threats before they open (advanced)", "ClamAV's on-access scanning can stop any program opening an infected file. It needs administrator setup, so Guardian checks its status and gives you the exact steps.")
+        self.onaccess_status = label("")
+        group.addWidget(self.onaccess_status)
         actions = QHBoxLayout()
+        actions.addWidget(button("Show setup steps", self.show_onaccess_steps))
+        actions.addWidget(button("Check again", self.check_onaccess))
+        actions.addStretch()
+        group.addLayout(actions)
+        layout.addWidget(frame)
+        frame, group = card("Checks & maintenance", "Check the installed command-line engine, update virus definitions and test desktop integration.")
+        actions = QGridLayout()
         self.engine_button = button("Check scan engine", self.check_engine)
         self.update_button = button("Update definitions", self.update_definitions)
         self.notification_button = button("Test notification", self.test_notification)
-        actions.addWidget(self.engine_button)
-        actions.addWidget(self.update_button)
-        actions.addWidget(self.notification_button)
-        actions.addStretch()
+        for index, control in enumerate((self.engine_button, self.update_button, self.notification_button, button("Open log folder", self.open_logs))):
+            actions.addWidget(control, index // 2, index % 2)
+        actions.setColumnStretch(2, 1)
         group.addLayout(actions)
         self.check_result = label("Engine and definition freshness have not been verified.")
         self.startup_status = label("")
@@ -137,14 +169,21 @@ class SettingsPage(QWidget):
         layout.addLayout(footer)
         layout.addStretch()
         self.load_settings()
+        self.check_onaccess()
         for toggle in self.controls.values():
             toggle.toggled.connect(self.save_settings)
+        for choice in self.choices.values():
+            choice.currentIndexChanged.connect(self.save_settings)
 
     def load_settings(self):
         settings = load_config()
         for key, toggle in self.controls.items():
             blocker = QSignalBlocker(toggle)
             toggle.setChecked(settings[key])
+            del blocker
+        for key, choice in self.choices.items():
+            blocker = QSignalBlocker(choice)
+            choice.setCurrentIndex(max(choice.findData(settings[key]), 0))
             del blocker
         self.notification_button.setEnabled(settings["notifications"] and self.process is None)
         exists = startup_path().is_file()
@@ -159,6 +198,7 @@ class SettingsPage(QWidget):
 
     def save_settings(self):
         settings = {key: toggle.isChecked() for key, toggle in self.controls.items()}
+        settings.update({key: choice.currentData() for key, choice in self.choices.items()})
         try:
             apply_preferences(settings, self.runtime_apply)
         except Exception as exc:
@@ -177,10 +217,43 @@ class SettingsPage(QWidget):
             blocker = QSignalBlocker(toggle)
             toggle.setChecked(DEFAULTS[key])
             del blocker
+        for key, choice in self.choices.items():
+            blocker = QSignalBlocker(choice)
+            choice.setCurrentIndex(choice.findData(DEFAULTS[key]))
+            del blocker
         self.save_settings()
 
     def check_engine(self):
         self.start_check("clamscan", ["--version"], "engine")
+
+    def check_onaccess(self):
+        text, attention = onaccess.describe(onaccess.status())
+        self.onaccess_status.setText(text)
+        self.onaccess_status.setObjectName("warning" if attention else "muted")
+        self.onaccess_status.style().unpolish(self.onaccess_status)
+        self.onaccess_status.style().polish(self.onaccess_status)
+
+    def show_onaccess_steps(self):
+        steps = onaccess.setup_steps(self.monitored.folders(), onaccess.status())
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set up on-access blocking")
+        dialog.resize(640, 460)
+        box = QVBoxLayout(dialog)
+        text = QPlainTextEdit(steps)
+        text.setReadOnly(True)
+        box.addWidget(text)
+        row = QHBoxLayout()
+        row.addStretch()
+        row.addWidget(button("Copy steps", lambda: QApplication.clipboard().setText(steps)))
+        row.addWidget(button("Close", dialog.accept))
+        box.addLayout(row)
+        self.steps_dialog = dialog
+        dialog.open()
+
+    def open_logs(self):
+        LOGS.mkdir(parents=True, exist_ok=True)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(LOGS))):
+            self.feedback.setText("Logs are in " + str(LOGS))
 
     def update_definitions(self):
         # Downloads can take minutes on a slow connection.

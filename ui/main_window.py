@@ -1,9 +1,10 @@
 from datetime import datetime, timedelta
-from PySide6.QtGui import QCloseEvent
+from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QSystemTrayIcon
 from config import load_config
 from core.definitions import describe
+from core.quarantine import QuarantineManager
 from core.watcher import Watcher
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QStackedWidget,
+    QApplication,
     QScrollArea,
     QWidget,
 )
@@ -21,6 +23,24 @@ from ui.dashboard import DashboardPage
 from ui.history import HistoryPage
 from ui.quarantine import QuarantinePage
 from ui.settings import SettingsPage
+from ui.theme import apply_theme, resolve
+
+
+def scan_due(run, days, hour, now):
+    """True when no scan ran since the latest scheduled slot.
+
+    With hour -1 a slot opens every `days` days after the previous run; otherwise
+    slots open at that hour, and a missed slot runs as soon as Guardian is open.
+    """
+    if not run:
+        return True
+    last = datetime.fromisoformat(run[0])
+    if hour < 0:
+        return now - last >= timedelta(days=days)
+    slot = now.replace(hour=hour, minute=0, second=0, microsecond=0)
+    if slot > now:
+        slot -= timedelta(days=1)
+    return last < slot - timedelta(days=days - 1)
 
 
 class PageStack(QStackedWidget):
@@ -70,6 +90,15 @@ class MainWindow(QMainWindow):
 
         for page in pages:
             QListWidgetItem(page, self.sidebar)
+        # Ctrl+1-4 open Overview, History, Quarantine and Settings.
+        self.page_shortcuts = {0: "Ctrl+1", 3: "Ctrl+2", 4: "Ctrl+3", 5: "Ctrl+4"}
+        for row, keys in self.page_shortcuts.items():
+            self.sidebar.item(row).setToolTip(keys)
+            QShortcut(QKeySequence(keys), self, lambda row=row: self.sidebar.setCurrentRow(row))
+        # Explicit keys: Qt's standard Quit and Refresh bindings are empty on some platforms.
+        QShortcut(QKeySequence("Ctrl+F"), self, self.focus_search)
+        QShortcut(QKeySequence("F5"), self, self.refresh_page)
+        QShortcut(QKeySequence("Ctrl+Q"), self, self.quit_guardian)
 
         # Main pages
         self.stack = PageStack()
@@ -88,7 +117,7 @@ class MainWindow(QMainWindow):
         self.watcher = Watcher()
         self.watcher_error = None
         self.stack.widget(5).runtime_apply = self.apply_settings
-        self.stack.widget(5).changed.connect(lambda _: self.refresh_protection())
+        self.stack.widget(5).changed.connect(self.settings_changed)
         self.stack.widget(5).monitored_changed.connect(self.monitored_folders_changed)
         self.stack.widget(5).definitions_updated.connect(self.check_definitions)
         try:
@@ -148,6 +177,30 @@ class MainWindow(QMainWindow):
             self.watcher_error = str(exc)
             self.refresh_protection()
             raise
+        self.refresh_protection()
+
+    def current_page(self):
+        return self.stack.widget(self.stack.currentIndex())
+
+    def focus_search(self):
+        page = self.current_page()
+        if hasattr(page, "search"):
+            page.search.setFocus()
+            page.search.selectAll()
+
+    def refresh_page(self):
+        page = self.current_page()
+        (page.refresh_dashboard if self.stack.currentIndex() == 0 else getattr(page, "refresh", lambda: None))()
+
+    def quit_guardian(self):
+        self.allow_close = True
+        QApplication.instance().quit()
+
+    def settings_changed(self, settings):
+        app = QApplication.instance()
+        # Only restyle when the effective theme changes; it repaints every widget.
+        if app.styleSheet() and resolve(app, settings["theme"]) != app.property("guardianTheme"):
+            apply_theme(app, settings["theme"])
         self.refresh_protection()
 
     def pause_monitoring(self, minutes=60):
@@ -244,15 +297,23 @@ class MainWindow(QMainWindow):
         label.style().unpolish(label)
         label.style().polish(label)
 
-    def run_scheduled_scan(self):
+    def run_scheduled_scan(self, now=None):
         dashboard = self.stack.widget(0)
-        if not load_config()["scheduled_scan"] or dashboard.scan_active or dashboard.closing:
+        settings = load_config()
+        if QuarantineManager().purge_older_than(settings["quarantine_retention_days"]):
+            self.stack.widget(4).refresh()
+        if dashboard.scan_active or dashboard.closing:
             return
-        # Any run counts, so cancelling a scheduled scan postpones it to tomorrow.
-        run = dashboard.db.last_scan_run()
-        if run and datetime.now() - datetime.fromisoformat(run[0]) < timedelta(days=1):
+        now = now or datetime.now()
+        hour = settings["scan_hour"]
+        if hour >= 0 and now.hour < hour:
             return
-        dashboard.quick_scan()
+        # The daily scan counts any run, so cancelling it postpones it to the next slot.
+        for enabled, name, days, start in ((settings["scheduled_scan"], None, 1, dashboard.quick_scan),
+                                           (settings["weekly_home_scan"], "Home scan", 7, dashboard.full_scan)):
+            if enabled and scan_due(dashboard.db.last_scan_run(name), days, hour, now):
+                start()
+                return
 
     def shutdown(self):
         self.timer.stop()
@@ -272,7 +333,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent):
         if self.allow_close or not load_config()["close_to_tray"] or not QSystemTrayIcon.isSystemTrayAvailable():
-            from PySide6.QtWidgets import QApplication
             QApplication.instance().quit()
             event.accept()
         else:

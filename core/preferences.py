@@ -1,10 +1,10 @@
 """Apply persisted preferences with rollback of runtime and autostart changes."""
-from config import load_config, save_config, DEFAULTS
+from config import load_config, save_config, valid, DEFAULTS
 from core.startup import set_startup, startup_path
 
 
 def apply_preferences(settings, runtime_apply=None):
-    if set(settings) != set(DEFAULTS) or any(type(v) is not bool for v in settings.values()):
+    if set(settings) != set(DEFAULTS) or not all(valid(k, v) for k, v in settings.items()):
         raise ValueError("Invalid settings")
     previous = load_config()
     entry = startup_path()

@@ -53,9 +53,11 @@ class GuardianDatabase:
         )
         """)
 
-        # Installs created before quarantine fingerprints existed lack this column.
-        if "sha256" not in [row[1] for row in cursor.execute("PRAGMA table_info(quarantine)")]:
-            cursor.execute("ALTER TABLE quarantine ADD COLUMN sha256 TEXT")
+        # Older installs lack the fingerprint and permission columns.
+        columns = [row[1] for row in cursor.execute("PRAGMA table_info(quarantine)")]
+        for column, kind in (("sha256", "TEXT"), ("mode", "INTEGER")):
+            if column not in columns:
+                cursor.execute(f"ALTER TABLE quarantine ADD COLUMN {column} {kind}")
 
         seed_monitored = not cursor.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='monitored_folders'"
@@ -86,19 +88,20 @@ class GuardianDatabase:
 
         self.conn.commit()
 
-    def add_quarantine(self, original, quarantine, virus, sha256=None):
+    def add_quarantine(self, original, quarantine, virus, sha256=None, mode=None):
         cursor = self.conn.cursor()
 
         cursor.execute("""
         INSERT INTO quarantine
-        (timestamp, original_path, quarantine_path, virus, sha256)
-        VALUES (?, ?, ?, ?, ?)
+        (timestamp, original_path, quarantine_path, virus, sha256, mode)
+        VALUES (?, ?, ?, ?, ?, ?)
         """, (
             datetime.now().isoformat(timespec="seconds"),
             original,
             quarantine,
             virus,
-            sha256
+            sha256,
+            mode
         ))
 
         self.conn.commit()
@@ -146,12 +149,17 @@ class GuardianDatabase:
             original_path,
             quarantine_path,
             virus,
-            sha256
+            sha256,
+            mode
         FROM quarantine
         ORDER BY id DESC
         """)
 
         return cursor.fetchall()
+
+    def quarantined_before(self, cutoff):
+        """Record ids quarantined before an ISO timestamp."""
+        return [row[0] for row in self.conn.execute("SELECT id FROM quarantine WHERE timestamp < ?", (cutoff,))]
 
     def delete_quarantine(self, quarantine_id):
         cursor = self.conn.cursor()
@@ -171,10 +179,11 @@ class GuardianDatabase:
         """, (datetime.now().isoformat(timespec="seconds"), name, scanned, found, errors, int(cancelled), duration))
         self.conn.commit()
 
-    def last_scan_run(self):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT timestamp, name, scanned, found, errors, cancelled, duration FROM scan_runs ORDER BY id DESC LIMIT 1")
-        return cursor.fetchone()
+    def last_scan_run(self, name=None):
+        query = "SELECT timestamp, name, scanned, found, errors, cancelled, duration FROM scan_runs"
+        if name:
+            return self.conn.execute(query + " WHERE name=? ORDER BY id DESC LIMIT 1", (name,)).fetchone()
+        return self.conn.execute(query + " ORDER BY id DESC LIMIT 1").fetchone()
 
     @staticmethod
     def _folder_table(table):

@@ -17,7 +17,7 @@ def test_old_database_gains_fingerprint_column(isolated):
     conn.execute("CREATE TABLE quarantine(id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, original_path TEXT, quarantine_path TEXT, virus TEXT)")
     conn.execute("INSERT INTO quarantine VALUES (1,'2026-01-01T00:00:00','/a','/q','Old')");conn.commit();conn.close()
     db=database.GuardianDatabase()
-    assert db.get_quarantined_files()==[(1,'2026-01-01T00:00:00','/a','/q','Old',None)]
+    assert db.get_quarantined_files()==[(1,'2026-01-01T00:00:00','/a','/q','Old',None,None)]
     db.close()
 
 def test_monitored_folders_seeded_once(isolated,monkeypatch):

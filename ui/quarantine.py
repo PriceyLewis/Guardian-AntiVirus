@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QLineEdit, QMessageBox, QHeaderView, QFileDialog
+from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtWidgets import QApplication, QCheckBox, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QLineEdit, QMessageBox, QHeaderView, QFileDialog
 from core.quarantine import QuarantineManager
 from database.database import GuardianDatabase
 from ui.components import heading, label, button, write_csv
@@ -14,7 +15,7 @@ class QuarantinePage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(18)
-        heading(layout, "Quarantine", "Detected files are isolated here. Restore only files you trust; monitoring may detect them again. Select several rows with Ctrl or Shift.")
+        heading(layout, "Quarantine", "Detected files are isolated here. Restore only files you trust; monitoring may detect them again. Select several rows with Ctrl or Shift; press Delete to delete the selection.")
         toolbar = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search files, detections or SHA-256…")
@@ -39,6 +40,13 @@ class QuarantinePage(QWidget):
         layout.addWidget(self.table, 1)
         self.empty = label("Quarantine is empty.")
         layout.addWidget(self.empty)
+        status = QHBoxLayout()
+        self.usage = label("")
+        status.addWidget(self.usage, 1)
+        self.keep_mode = QCheckBox("Restore original permissions")
+        self.keep_mode.setToolTip("Restore files with their original permissions, such as executable. When off, restored files are readable only by you.")
+        status.addWidget(self.keep_mode)
+        layout.addLayout(status)
         self.feedback = label("")
         layout.addWidget(self.feedback)
         actions = QHBoxLayout()
@@ -52,6 +60,7 @@ class QuarantinePage(QWidget):
         layout.addLayout(actions)
         self.search.textChanged.connect(self.filter_table)
         self.table.itemSelectionChanged.connect(self.update_actions)
+        QShortcut(QKeySequence("Del"), self.table, self.delete_file)
         self.refresh()
 
     def refresh(self):
@@ -75,6 +84,8 @@ class QuarantinePage(QWidget):
         self.empty.setVisible(not rows)
         self.empty.setText("No files match your search." if self.rows else "Quarantine is empty. Detected files will appear here.")
         self.export_button.setEnabled(bool(rows))
+        size = QuarantineManager().disk_usage()
+        self.usage.setText(f"{len(self.rows)} file{'s' if len(self.rows) != 1 else ''} in quarantine · {format_size(size)} on disk" if self.rows else "")
         self.update_actions()
 
     def update_actions(self):
@@ -129,7 +140,10 @@ class QuarantinePage(QWidget):
         failures = []
         for record in records:
             try:
-                getattr(manager, action)(record)
+                if action == "restore":
+                    manager.restore(record, original_mode=self.keep_mode.isChecked())
+                else:
+                    manager.delete(record)
             except Exception as exc:
                 original = next((r[2] for r in self.rows if r[0] == record), str(record))
                 failures.append(f"{original}: {exc}")
@@ -152,3 +166,10 @@ class QuarantinePage(QWidget):
 
     def write_report(self, path):
         write_csv(path, ["Date", "Original file", "Detection", "SHA-256"], [(r[1], r[2], r[4], r[5]) for r in self.visible_rows])
+
+
+def format_size(size):
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:,} {unit}" if unit == "bytes" else f"{size:.1f} {unit}"
+        size /= 1024

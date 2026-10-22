@@ -7,6 +7,7 @@ from core.paths import QUARANTINE, is_excluded, is_guardian_storage
 from core.scanner import GuardianScanner
 from core.quarantine import QuarantineManager
 from core.notifier import GuardianNotifier
+from core.log import log
 from database.database import GuardianDatabase
 
 
@@ -34,7 +35,9 @@ class ScanWorker(QObject):
         began = time.monotonic()
         def report_error(message):
             totals["errors"] += 1
+            log.warning("%s: %s", self.name, message)
             self.error.emit(message)
+        log.info("%s started: %s", self.name, ", ".join(map(str, self.folders)))
         try:
             scanner = GuardianScanner()
             db = GuardianDatabase()
@@ -76,6 +79,8 @@ class ScanWorker(QObject):
                     totals[status] += 1
                 if status == "error":
                     report_error(f"{file}: {virus}")
+                if status == "found":
+                    log.warning("Detection %s in %s", virus, file)
                 if status == "found" and self.quarantine_found:
                     try:
                         quarantine.quarantine(file, virus)
@@ -99,5 +104,7 @@ class ScanWorker(QObject):
                 except Exception as exc:
                     report_error(f"Could not record scan: {exc}")
                 db.close()
+            log.info("%s %s: %d scanned, %d found, %d quarantined, %d errors in %.1fs", self.name,
+                     "cancelled" if cancelled else "finished", scanned, totals["found"], totals["quarantined"], totals["errors"], duration)
             self.summary.emit(dict(totals, scanned=scanned, cancelled=cancelled, duration=duration))
             self.finished.emit(scanned)
