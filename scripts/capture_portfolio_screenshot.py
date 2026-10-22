@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,7 @@ def main():
 
     app = QApplication([])
     app.setWindowIcon(QIcon(str(ROOT / "assets/icons/Guardian.png")))
+    # The portfolio screenshot always uses the dark theme.
 
     theme = ROOT / "assets/themes/dark.qss"
     if theme.exists():
@@ -36,6 +38,11 @@ def main():
     window = MainWindow()
     window.resize(1180, 820)
     window.show()
+    # Let the asynchronous ClamAV definitions check finish before capturing.
+    deadline = time.monotonic() + 15
+    while window.definitions_process is not None and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.05)
     app.processEvents()
 
     output = ROOT / "docs" / "screenshots" / "guardian-overview.png"

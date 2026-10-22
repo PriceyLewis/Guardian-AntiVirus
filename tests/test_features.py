@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
-from test_guardian import isolated, app
+from test_guardian import isolated, app, engine
 
 
 def drain(app, predicate, timeout=3):
@@ -14,7 +14,7 @@ def drain(app, predicate, timeout=3):
         time.sleep(.005)
     assert predicate()
 
-@pytest.mark.parametrize('key', ['realtime','archives','notifications','startup','close_to_tray'])
+@pytest.mark.parametrize('key', ['realtime','archives','notifications','startup','close_to_tray','scheduled_scan'])
 def test_every_setting_persists_both_states_and_reopens(isolated,app,key):
     from config import load_config
     from ui.settings import SettingsPage
@@ -182,7 +182,7 @@ def test_cancel_scan_reports_cancelled(isolated,app,monkeypatch):
     def scan(path):
         entered.set();release.wait(2)
         return {'status':'clean','virus':None}
-    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:SimpleNamespace(scan_file=scan))
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(scan))
     page=DashboardPage()
     page.start_scan(lambda **kw:page.scan_manager.custom_scan(folder,**kw))
     drain(app,entered.is_set)
@@ -199,7 +199,7 @@ def test_custom_scan_dialog_and_error_summary(isolated,app,monkeypatch):
     from PySide6.QtWidgets import QFileDialog
     folder=isolated/'files';folder.mkdir();(folder/'file').write_text('fixture')
     monkeypatch.setattr(QFileDialog,'getExistingDirectory',lambda *a:str(folder))
-    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:SimpleNamespace(scan_file=lambda p:{'status':'error','virus':'engine unavailable'}))
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(lambda p:{'status':'error','virus':'engine unavailable'}))
     page=DashboardPage();page.custom_scan()
     drain(app,lambda:not page.scan_active)
     assert page.last_summary['errors']==1
@@ -235,3 +235,202 @@ def test_diagnostic_timeout_releases_controls(isolated,app):
     drain(app,lambda:page.process is None)
     assert 'timed out' in page.check_result.text()
     assert page.engine_button.isEnabled()
+
+def test_watcher_ignores_guardian_storage_and_duplicate_events(isolated,monkeypatch):
+    import core.paths as paths
+    from core.watcher import GuardianWatcher
+    from database.database import GuardianDatabase
+    monkeypatch.setattr(paths,'DATABASE_DIR',isolated/'database')
+    (isolated/'database').mkdir()
+    internal=isolated/'database'/'guardian.db';internal.write_text('history')
+    scan=Mock(return_value={'status':'clean','virus':None})
+    monkeypatch.setattr('core.watcher.GuardianScanner',lambda:SimpleNamespace(scan_file=scan))
+    watcher=GuardianWatcher()
+    watcher.scan(internal)
+    scan.assert_not_called()
+    file=isolated/'download';file.write_text('first')
+    watcher.scan(file);watcher.scan(file)
+    assert scan.call_count==1
+    file.write_text('second version')
+    watcher.scan(file)
+    assert scan.call_count==2
+    db=GuardianDatabase();assert db.get_scan_count()==2;db.close()
+
+def test_worker_skips_database_folder(isolated,monkeypatch,app):
+    import core.paths as paths
+    from core.scan_worker import ScanWorker
+    from test_guardian import engine
+    monkeypatch.setattr(paths,'DATABASE_DIR',isolated/'files'/'database')
+    (isolated/'files'/'database').mkdir(parents=True)
+    (isolated/'files'/'database'/'guardian.db').write_text('history')
+    (isolated/'files'/'document').write_text('fixture')
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(lambda p:{'status':'clean','virus':None}))
+    worker=ScanWorker([isolated/'files']);done=[]
+    worker.finished.connect(done.append);worker.run()
+    assert done==[1]
+
+def test_cli_batch_parses_each_file_with_one_process(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/name for name in ('clean','a: b','empty','denied','eicar')]
+    for file in files:file.write_text('x')
+    out='\n'.join([f'{files[0]}: OK',f'{files[1]}: OK',f'{files[2]}: Empty file',f'{files[3]}: Permission denied',f'{files[4]}: Eicar-Test FOUND'])
+    run=Mock(return_value=SimpleNamespace(returncode=1,stdout=out,stderr=''))
+    monkeypatch.setattr('core.scanner.subprocess.run',run)
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
+    results=dict(scanner.scan_files(files+[isolated/'missing']))
+    assert run.call_count==1
+    assert [results[f]['status'] for f in files]==['clean','clean','clean','error','found']
+    assert results[files[4]]['virus']=='Eicar-Test'
+    assert results[isolated/'missing']['status']=='error'
+
+def test_cli_batch_never_reports_unlisted_files_clean(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/'one',isolated/'two']
+    for file in files:file.write_text('x')
+    monkeypatch.setattr('core.scanner.subprocess.run',Mock(return_value=SimpleNamespace(returncode=2,stdout='',stderr='No supported database files found')))
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
+    results=dict(scanner.scan_files(files))
+    assert all(r=={'status':'error','virus':'No supported database files found'} for r in results.values())
+
+def test_daemon_scans_files_individually(isolated):
+    from core.scanner import GuardianScanner
+    files=[isolated/'one',isolated/'two']
+    for file in files:file.write_text('x')
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=Mock()
+    scanner.clamd.scan_file.return_value=None
+    assert [r['status'] for _,r in scanner.scan_files(files)]==['clean','clean']
+    assert scanner.clamd.scan_file.call_count==2
+
+def test_clear_history_requires_confirmation(isolated,app,monkeypatch):
+    from ui.history import HistoryPage
+    from PySide6.QtWidgets import QMessageBox
+    page=HistoryPage();page.db.add_scan('/a','clean');page.refresh()
+    monkeypatch.setattr(QMessageBox,'question',lambda *a:QMessageBox.StandardButton.No)
+    page.clear_history();assert page.table.rowCount()==1
+    monkeypatch.setattr(QMessageBox,'question',lambda *a:QMessageBox.StandardButton.Yes)
+    page.clear_history();assert page.table.rowCount()==0
+    assert not page.clear_button.isEnabled()
+    page.db.close()
+
+def test_login_entry_starts_minimized(isolated):
+    from core.startup import set_startup,startup_path
+    set_startup(True)
+    assert '--minimized' in startup_path().read_text()
+
+@pytest.mark.parametrize('output,expected,attention',[
+    ('ClamAV 1.5.4/27500/Tue Oct 20 08:00:00 2026','definitions 27500, updated 2 days ago',False),
+    ('ClamAV 1.5.4/27400/Thu Oct  1 08:00:00 2026','out of date',True),
+    ('ClamAV 1.5.4','no official signature database',True),
+    ('','ClamAV not found',True),
+])
+def test_definitions_freshness(output,expected,attention):
+    from datetime import datetime
+    from core.definitions import describe
+    text,needs=describe(output,now=datetime(2026,10,22,12,0))
+    assert expected in text and needs is attention
+
+def test_watcher_waits_for_writes_and_skips_partial_downloads(isolated,monkeypatch):
+    import core.watcher as watcher_module
+    from core.watcher import GuardianWatcher
+    monkeypatch.setattr(watcher_module,'SETTLE_SECONDS',.2)
+    scanned=[]
+    monkeypatch.setattr('core.watcher.GuardianScanner',lambda:SimpleNamespace(scan_file=lambda p:scanned.append(p) or {'status':'clean','virus':None}))
+    file=isolated/'download.bin';file.write_text('data')
+    watcher=GuardianWatcher()
+    try:
+        for _ in range(5):watcher.queue(file)
+        watcher.queue(isolated/'video.mp4.crdownload')
+        deadline=time.monotonic()+3
+        while not scanned and time.monotonic()<deadline:time.sleep(.02)
+        time.sleep(.5)
+        assert scanned==[file]
+    finally:
+        watcher.close()
+    assert not watcher.thread.is_alive()
+
+def test_exclusions_apply_to_scans_and_monitoring(isolated,monkeypatch,app):
+    from core.scan_worker import ScanWorker
+    from core.watcher import GuardianWatcher
+    from database.database import GuardianDatabase
+    from test_guardian import engine
+    folder=isolated/'files';(folder/'vm').mkdir(parents=True)
+    (folder/'vm'/'disk.img').write_text('large');(folder/'doc').write_text('fixture')
+    db=GuardianDatabase();db.add_exclusion(folder/'vm');db.close()
+    scan=Mock(return_value={'status':'clean','virus':None})
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(scan))
+    worker=ScanWorker([folder]);done=[]
+    worker.finished.connect(done.append);worker.run()
+    assert done==[1] and scan.call_args.args[0].name=='doc'
+    monkeypatch.setattr('core.watcher.GuardianScanner',lambda:SimpleNamespace(scan_file=scan))
+    GuardianWatcher().scan(folder/'vm'/'disk.img')
+    assert scan.call_count==1
+
+def test_scan_runs_persist_last_scan_and_duration(isolated,monkeypatch,app):
+    from ui.dashboard import DashboardPage
+    from test_guardian import engine
+    folder=isolated/'files';folder.mkdir();(folder/'file').write_text('fixture')
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(lambda p:{'status':'clean','virus':None}))
+    page=DashboardPage()
+    assert page.protection.last_scan.text()=='No scans yet'
+    page.start_scan(lambda **kw:page.scan_manager.custom_scan(folder,**kw))
+    drain(app,lambda:not page.scan_active)
+    assert 'Took' in page.result_text.text()
+    page.scan_manager.shutdown();page.db.close()
+    reopened=DashboardPage()
+    assert reopened.protection.last_scan.text().startswith('Last scan: Custom scan complete')
+    reopened.db.close()
+
+def test_scheduled_scan_runs_daily_only_when_enabled(isolated,app):
+    from config import load_config,save_config
+    from ui.main_window import MainWindow
+    window=MainWindow();dash=window.stack.widget(0);dash.quick_scan=Mock()
+    try:
+        window.run_scheduled_scan();dash.quick_scan.assert_not_called()
+        save_config(dict(load_config(),scheduled_scan=True))
+        window.run_scheduled_scan();dash.quick_scan.assert_called_once()
+        dash.db.add_scan_run('Quick scan',1,0,0,True,1.0)
+        window.run_scheduled_scan();dash.quick_scan.assert_called_once()
+        dash.db.conn.execute("UPDATE scan_runs SET timestamp='2000-01-01T00:00:00'");dash.db.conn.commit()
+        window.run_scheduled_scan();assert dash.quick_scan.call_count==2
+    finally:
+        window.shutdown()
+
+def test_settings_folder_lists(isolated,app,monkeypatch):
+    from ui.settings import SettingsPage
+    from PySide6.QtWidgets import QFileDialog
+    from database.database import GuardianDatabase
+    folder=isolated/'trusted';folder.mkdir()
+    monkeypatch.setattr(QFileDialog,'getExistingDirectory',lambda *a:str(folder))
+    page=SettingsPage();monitored=Mock();page.monitored_changed.connect(monitored)
+    assert page.exclusions.list.item(0).text()=='No folders excluded.'
+    assert page.exclusions.folders()==[]
+    page.exclusions.add()
+    assert page.exclusions.folders()==[str(folder)]
+    monitored.assert_not_called()
+    page.exclusions.list.setCurrentRow(0);assert page.exclusions.remove_button.isEnabled()
+    page.exclusions.remove()
+    assert page.exclusions.folders()==[]
+    page.monitored.add();assert str(folder) in page.monitored.folders()
+    monitored.assert_called_once()
+    db=GuardianDatabase();assert str(folder) in db.get_monitored_folders();db.close()
+
+def test_batch_progress_reports_before_engine_runs(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/'one',isolated/'two']
+    for file in files:file.write_text('x')
+    started=[]
+    def run(args,**kw):
+        assert started
+        return SimpleNamespace(returncode=0,stdout='',stderr='')
+    monkeypatch.setattr('core.scanner.subprocess.run',run)
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
+    list(scanner.scan_files(files,started=started.append))
+    assert started==[files]
+
+def test_shutdown_during_running_checks(isolated,app):
+    import sys
+    from ui.main_window import MainWindow
+    window=MainWindow();settings=window.stack.widget(5)
+    settings.start_check(sys.executable,['-c','import time; time.sleep(10)'],'engine')
+    window.shutdown()
+    assert settings.process is None and window.definitions_process is None

@@ -5,3 +5,7 @@ __pycache__/
 config.json
 database/*.db*
 quarantine/
+guardian.lock
+dist/
+build/
+*.egg-info/

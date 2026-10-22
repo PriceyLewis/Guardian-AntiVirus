@@ -15,3 +15,11 @@ jobs:
       - run: python -m pytest -q
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Build and smoke-test the installable package
+        run: |
+          python -m pip wheel --no-deps -w dist .
+          python -m venv /tmp/guardian-install
+          /tmp/guardian-install/bin/pip install dist/*.whl
+          /tmp/guardian-install/bin/guardian --help
+          echo clean > /tmp/guardian-sample.txt
+          GUARDIAN_DATA_DIR=/tmp/guardian-smoke /tmp/guardian-install/bin/guardian --scan --report-only /tmp/guardian-sample.txt || test $? -eq 2

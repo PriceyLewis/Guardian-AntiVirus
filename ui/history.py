@@ -1,9 +1,7 @@
-import csv
-from pathlib import Path
-from PySide6.QtCore import Qt
+from datetime import datetime, timedelta
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QComboBox, QFileDialog, QMessageBox, QHeaderView
 from database.database import GuardianDatabase
-from ui.components import heading, label, button
+from ui.components import heading, label, button, write_csv
 
 
 class HistoryPage(QWidget):
@@ -23,11 +21,14 @@ class HistoryPage(QWidget):
         self.filter = QComboBox()
         for text, value in [("All results", ""), ("Clean", "clean"), ("Detections", "found"), ("Errors", "error")]:
             self.filter.addItem(text, value)
+        self.period = QComboBox()
+        for text, days in [("All time", 0), ("Last 24 hours", 1), ("Last 7 days", 7), ("Last 30 days", 30)]:
+            self.period.addItem(text, days)
         toolbar.addWidget(self.search, 1)
         toolbar.addWidget(self.filter)
+        toolbar.addWidget(self.period)
         self.export_button = button("Export CSV", self.export_csv)
         toolbar.addWidget(self.export_button)
-        toolbar.addWidget(button("Refresh", self.refresh))
         layout.addLayout(toolbar)
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Time", "File path", "Result", "Details"])
@@ -43,10 +44,16 @@ class HistoryPage(QWidget):
         layout.addWidget(self.table, 1)
         self.empty = label("No scan results yet. Start a scan from Overview.")
         layout.addWidget(self.empty)
+        footer = QHBoxLayout()
         self.count = label("")
-        layout.addWidget(self.count)
+        footer.addWidget(self.count, 1)
+        footer.addWidget(button("Refresh", self.refresh))
+        self.clear_button = button("Clear history", self.clear_history, "danger")
+        footer.addWidget(self.clear_button)
+        layout.addLayout(footer)
         self.search.textChanged.connect(self.filter_table)
         self.filter.currentIndexChanged.connect(self.filter_table)
+        self.period.currentIndexChanged.connect(self.filter_table)
         self.refresh()
 
     def refresh(self):
@@ -56,13 +63,19 @@ class HistoryPage(QWidget):
     def filter_table(self):
         text = self.search.text().casefold()
         status = self.filter.currentData()
-        self.filtered_rows = [r for r in self.rows if (not status or r[2] == status) and text in (r[1] + " " + (r[3] or "")).casefold()]
+        days = self.period.currentData()
+        # ISO timestamps sort chronologically as strings.
+        since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds") if days else ""
+        self.filtered_rows = [r for r in self.rows if (not status or r[2] == status) and r[0] >= since
+                              and text in (r[1] + " " + (r[3] or "")).casefold()]
         self.populate_table(self.filtered_rows)
 
     def populate_table(self, rows):
         self.table.setRowCount(len(rows))
         for row, values in enumerate(rows):
             for col, value in enumerate(values):
+                if col == 0:
+                    value = str(value).replace("T", " ")
                 if col == 2:
                     value = {"found": "Detection", "clean": "Clean", "error": "Error"}.get(value, value)
                 item = QTableWidgetItem(str(value or "—"))
@@ -72,16 +85,17 @@ class HistoryPage(QWidget):
         self.empty.setText("No results match your filters." if self.rows else "No scan results yet. Start a scan from Overview.")
         self.count.setText(f"Showing {len(rows)} of {len(self.rows)} recent results")
         self.export_button.setEnabled(bool(rows))
+        self.clear_button.setEnabled(bool(self.rows))
+
+    def clear_history(self):
+        if QMessageBox.question(self, "Clear history", "Delete all scan history? Quarantined files are not affected.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self.db.clear_scans()
+        self.refresh()
+        self.count.setText("Scan history cleared")
 
     def write_csv(self, path):
-        # Neutralise spreadsheet formulas in untrusted filenames and engine text.
-        def safe(value):
-            value = str(value or "")
-            return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")) else value
-        with Path(path).open("w", encoding="utf-8-sig", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow(["Time", "File path", "Result", "Details"])
-            writer.writerows([safe(value) for value in row] for row in self.filtered_rows)
+        write_csv(path, ["Time", "File path", "Result", "Details"], self.filtered_rows)
 
     def export_csv(self):
         path, _ = QFileDialog.getSaveFileName(self, "Export visible results", "guardian-history.csv", "CSV files (*.csv)")

@@ -20,12 +20,13 @@ class ScanManager:
         finished_callback=None,
         error_callback=None,
         summary_callback=None,
+        name="Scan",
     ):
 
         if self.thread and self.thread.isRunning():
             return False
         self.thread = QThread()
-        self.worker = ScanWorker(folders)
+        self.worker = ScanWorker(folders, name)
 
         self.worker.moveToThread(self.thread)
 
@@ -70,7 +71,7 @@ class ScanManager:
             Path.home() / "Documents",
         ]
 
-        return self.start_scan(folders, **kwargs)
+        return self.start_scan(folders, name="Quick scan", **kwargs)
 
     def full_scan(self, **kwargs):
 
@@ -78,8 +79,12 @@ class ScanManager:
             Path.home()
         ]
 
-        return self.start_scan(folders, **kwargs)
+        return self.start_scan(folders, name="Home scan", **kwargs)
 
     def custom_scan(self, folder, **kwargs):
 
-        return self.start_scan([Path(folder)], **kwargs)
+        return self.start_scan([Path(folder)], name="Custom scan", **kwargs)
+
+    def scan_paths(self, paths, **kwargs):
+
+        return self.start_scan([Path(p) for p in paths], name="Custom scan", **kwargs)

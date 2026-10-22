@@ -2,6 +2,7 @@ from datetime import datetime
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QProgressBar, QFileDialog
 from core.scan_manager import ScanManager
+from core.notifier import GuardianNotifier
 from database.database import GuardianDatabase
 from ui.widgets import StatCard, ProtectionCard, RecentActivityCard
 from ui.components import heading, card, label, button
@@ -15,6 +16,7 @@ class DashboardPage(QWidget):
         self.scan_errors = []
         self.last_summary = None
         self.scan_active = False
+        self.scan_name = "Scan"
         self.closing = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
@@ -29,7 +31,7 @@ class DashboardPage(QWidget):
         for item in (self.files_card, self.threats_card, self.quarantine_card):
             stats.addWidget(item)
         layout.addLayout(stats)
-        frame, group = card("Start a scan", "Choose the area you want to check. Quarantined files and symbolic links are excluded.")
+        frame, group = card("Start a scan", "Choose the area you want to check, or drop files and folders onto this window. Quarantined files, excluded folders and symbolic links are skipped.")
         self.buttons = QWidget()
         self.buttons.setObjectName("scanButtons")
         actions = QGridLayout(self.buttons)
@@ -37,7 +39,8 @@ class DashboardPage(QWidget):
         self.buttons.quick = button("Quick scan", self.quick_scan, "primary")
         self.buttons.full = button("Home scan", self.full_scan)
         self.buttons.custom = button("Choose folder…", self.custom_scan)
-        for i, (control, text) in enumerate([(self.buttons.quick, "Downloads, Desktop & Documents"), (self.buttons.full, "All files in your home folder"), (self.buttons.custom, "A folder you select")]):
+        self.buttons.files = button("Choose files…", self.file_scan)
+        for i, (control, text) in enumerate([(self.buttons.quick, "Downloads, Desktop & Documents"), (self.buttons.full, "All files in your home folder"), (self.buttons.custom, "A folder you select"), (self.buttons.files, "Specific files you select")]):
             actions.addWidget(control, 0, i)
             actions.addWidget(label(text), 1, i)
             actions.setColumnStretch(i, 1)
@@ -74,12 +77,19 @@ class DashboardPage(QWidget):
         self.threats_card.set_value(self.db.get_threat_count())
         self.quarantine_card.set_value(self.db.get_quarantine_count())
         self.activity.update_activity(self.db.recent_scans(5))
+        run = self.db.last_scan_run()
+        if run:
+            timestamp, name, scanned, found, errors, cancelled, duration = run
+            state = "cancelled" if cancelled else ("finished with errors" if errors else "complete")
+            when = datetime.fromisoformat(timestamp).strftime("%d %b, %H:%M")
+            self.protection.last_scan.setText(f"Last scan: {name} {state} · {when} · {scanned:,} files in {format_duration(duration)}")
 
     def start_scan(self, scan_function, name="Scan"):
         if self.scan_active or (self.scan_manager.thread and self.scan_manager.thread.isRunning()):
             return
         self.scan_errors = []
         self.last_summary = None
+        self.scan_name = name
         self.scan_active = True
         self.buttons.setEnabled(False)
         self.cancel_button.setEnabled(True)
@@ -106,6 +116,17 @@ class DashboardPage(QWidget):
         folder = QFileDialog.getExistingDirectory(self, "Choose folder to scan")
         if folder:
             self.start_scan(lambda **kwargs: self.scan_manager.custom_scan(folder, **kwargs), "Custom scan")
+
+    def file_scan(self):
+        if self.scan_active:
+            return
+        files, _ = QFileDialog.getOpenFileNames(self, "Choose files to scan")
+        if files:
+            self.scan_paths(files)
+
+    def scan_paths(self, paths):
+        """Scan any mix of files and folders, e.g. dropped onto the window."""
+        self.start_scan(lambda **kwargs: self.scan_manager.scan_paths(paths, **kwargs), "Custom scan")
 
     def cancel_scan(self):
         self.scan_manager.cancel()
@@ -150,7 +171,22 @@ class DashboardPage(QWidget):
         self.current_file.setText("No files checked." if not scanned else f"{scanned:,} files processed")
         self.result_text.show()
         self.error_text.setVisible(bool(self.scan_errors))
-        self.result_text.setText(f"Clean: {summary['clean']}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}   •   Errors: {summary['errors']}")
+        took = f"   •   Took {format_duration(summary['duration'])}" if "duration" in summary else ""
+        self.result_text.setText(f"Clean: {summary['clean']}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}   •   Errors: {summary['errors']}{took}")
         self.error_text.setText("\n".join(self.scan_errors))
-        self.protection.last_scan.setText(state + " · " + datetime.now().strftime("%d %b, %H:%M"))
         self.refresh_dashboard()
+        # Tray-started and scheduled scans may finish while the window is hidden.
+        if not self.window().isVisible():
+            found = f"{summary['found']} threat{'s' if summary['found'] != 1 else ''} found" if summary["found"] else "no threats found"
+            GuardianNotifier.notify("Guardian", f"{self.scan_name}: {state.lower()}, {scanned:,} file{'s' if scanned != 1 else ''} checked, {found}.")
+
+
+def format_duration(seconds):
+    seconds = int(round(seconds or 0))
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
