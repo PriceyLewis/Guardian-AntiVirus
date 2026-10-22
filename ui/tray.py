@@ -60,11 +60,8 @@ class GuardianTray(QSystemTrayIcon):
 
     def quick_scan(self):
         self.window.sidebar.setCurrentRow(0)
-
-        dashboard = self.window.stack.widget(0)
-
-        if hasattr(dashboard, "quick_scan"):
-            dashboard.quick_scan()
+        self.window.stack.widget(0).quick_scan()
+        self.show_window()
 
     def show_history(self):
         self.window.sidebar.setCurrentRow(3)
@@ -73,12 +70,3 @@ class GuardianTray(QSystemTrayIcon):
     def quit_guardian(self):
         self.window.allow_close = True
         QApplication.quit()
-
-    def set_protected(self):
-        self.status_action.setText("🟢 Protected")
-
-    def set_scanning(self):
-        self.status_action.setText("🟡 Scanning...")
-
-    def set_threat(self):
-        self.status_action.setText("🔴 Threat Detected")

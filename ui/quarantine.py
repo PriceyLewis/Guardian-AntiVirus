@@ -58,7 +58,7 @@ class QuarantinePage(QWidget):
         self.table.setRowCount(0)
         self.table.setRowCount(len(rows))
         for index, row in enumerate(rows):
-            for col, value in enumerate((row[1], row[2], row[4])):
+            for col, value in enumerate((str(row[1]).replace("T", " "), row[2], row[4])):
                 item = QTableWidgetItem(str(value or "—"))
                 item.setToolTip(str(value or ""))
                 item.setData(Qt.ItemDataRole.UserRole, row[0])

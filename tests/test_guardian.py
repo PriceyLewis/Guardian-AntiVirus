@@ -21,6 +21,10 @@ def isolated(tmp_path, monkeypatch):
     config.save_config(dict(config.DEFAULTS, realtime=False, notifications=False))
     return tmp_path
 
+def engine(scan):
+    """Scanner double exposing both the per-file and batch interfaces."""
+    return SimpleNamespace(scan_file=scan, scan_files=lambda paths:((p,scan(p)) for p in paths))
+
 @pytest.fixture(scope='session')
 def app():
     from PySide6.QtWidgets import QApplication
@@ -96,8 +100,8 @@ def test_worker_quarantines_and_excludes_storage(isolated,monkeypatch,app):
     from core.scan_worker import ScanWorker
     from database.database import GuardianDatabase
     folder=isolated/'files';folder.mkdir();(folder/'sample').write_text('test')
-    engine=Mock();engine.scan_file.return_value={'status':'found','virus':'Test'}
-    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine)
+    found=engine(lambda p:{'status':'found','virus':'Test'})
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:found)
     worker=ScanWorker([folder,folder,isolated/'quarantine']);done=[]
     worker.finished.connect(done.append);worker.run()
     assert done==[1]
@@ -154,7 +158,7 @@ def test_scan_thread_and_duplicate_guard(isolated,monkeypatch,app):
     import time
     from core.scan_manager import ScanManager
     folder=isolated/'files';folder.mkdir();(folder/'file').write_text('test')
-    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:SimpleNamespace(scan_file=lambda p:{'status':'clean','virus':None}))
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(lambda p:{'status':'clean','virus':None}))
     manager=ScanManager()
     assert manager.start_scan([folder]) is True
     assert manager.start_scan([folder]) is False

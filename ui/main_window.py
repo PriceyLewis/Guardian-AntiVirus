@@ -39,6 +39,7 @@ class MainWindow(QMainWindow):
         super().__init__()
 
         self.allow_close = False
+        self.tray_hint_shown = False
 
         self.setWindowTitle("Guardian Antivirus")
         self.resize(1180, 820)
@@ -146,6 +147,10 @@ class MainWindow(QMainWindow):
         card.status.style().polish(card.status)
         card.status.setWordWrap(True)
         card.realtime.setText("Real-Time Monitoring: " + ("Running" if active else "Off"))
+        dashboard = self.stack.widget(0)
+        # Monitoring writes history in the background; keep visible counts current.
+        if self.stack.currentIndex() == 0 and not dashboard.scan_active and not dashboard.closing:
+            dashboard.refresh_dashboard()
         if hasattr(self, "tray"):
             self.tray.status_action.setText("Scan in progress" if self.stack.widget(0).scan_active else status)
 
@@ -166,3 +171,6 @@ class MainWindow(QMainWindow):
         else:
             self.hide()
             event.ignore()
+            if hasattr(self, "tray") and not self.tray_hint_shown:
+                self.tray_hint_shown = True
+                self.tray.showMessage("Guardian is still running", "Guardian keeps protecting your folders from the system tray. Use the tray menu to quit.", QSystemTrayIcon.MessageIcon.Information, 4000)

@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 import pytest
-from test_guardian import isolated, app
+from test_guardian import isolated, app, engine
 
 
 def drain(app, predicate, timeout=3):
@@ -182,7 +182,7 @@ def test_cancel_scan_reports_cancelled(isolated,app,monkeypatch):
     def scan(path):
         entered.set();release.wait(2)
         return {'status':'clean','virus':None}
-    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:SimpleNamespace(scan_file=scan))
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(scan))
     page=DashboardPage()
     page.start_scan(lambda **kw:page.scan_manager.custom_scan(folder,**kw))
     drain(app,entered.is_set)
@@ -199,7 +199,7 @@ def test_custom_scan_dialog_and_error_summary(isolated,app,monkeypatch):
     from PySide6.QtWidgets import QFileDialog
     folder=isolated/'files';folder.mkdir();(folder/'file').write_text('fixture')
     monkeypatch.setattr(QFileDialog,'getExistingDirectory',lambda *a:str(folder))
-    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:SimpleNamespace(scan_file=lambda p:{'status':'error','virus':'engine unavailable'}))
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(lambda p:{'status':'error','virus':'engine unavailable'}))
     page=DashboardPage();page.custom_scan()
     drain(app,lambda:not page.scan_active)
     assert page.last_summary['errors']==1
@@ -235,3 +235,84 @@ def test_diagnostic_timeout_releases_controls(isolated,app):
     drain(app,lambda:page.process is None)
     assert 'timed out' in page.check_result.text()
     assert page.engine_button.isEnabled()
+
+def test_watcher_ignores_guardian_storage_and_duplicate_events(isolated,monkeypatch):
+    import core.paths as paths
+    from core.watcher import GuardianWatcher
+    from database.database import GuardianDatabase
+    monkeypatch.setattr(paths,'DATABASE_DIR',isolated/'database')
+    (isolated/'database').mkdir()
+    internal=isolated/'database'/'guardian.db';internal.write_text('history')
+    scan=Mock(return_value={'status':'clean','virus':None})
+    monkeypatch.setattr('core.watcher.GuardianScanner',lambda:SimpleNamespace(scan_file=scan))
+    watcher=GuardianWatcher()
+    watcher.scan(internal)
+    scan.assert_not_called()
+    file=isolated/'download';file.write_text('first')
+    watcher.scan(file);watcher.scan(file)
+    assert scan.call_count==1
+    file.write_text('second version')
+    watcher.scan(file)
+    assert scan.call_count==2
+    db=GuardianDatabase();assert db.get_scan_count()==2;db.close()
+
+def test_worker_skips_database_folder(isolated,monkeypatch,app):
+    import core.paths as paths
+    from core.scan_worker import ScanWorker
+    from test_guardian import engine
+    monkeypatch.setattr(paths,'DATABASE_DIR',isolated/'files'/'database')
+    (isolated/'files'/'database').mkdir(parents=True)
+    (isolated/'files'/'database'/'guardian.db').write_text('history')
+    (isolated/'files'/'document').write_text('fixture')
+    monkeypatch.setattr('core.scan_worker.GuardianScanner',lambda:engine(lambda p:{'status':'clean','virus':None}))
+    worker=ScanWorker([isolated/'files']);done=[]
+    worker.finished.connect(done.append);worker.run()
+    assert done==[1]
+
+def test_cli_batch_parses_each_file_with_one_process(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/name for name in ('clean','a: b','empty','denied','eicar')]
+    for file in files:file.write_text('x')
+    out='\n'.join([f'{files[0]}: OK',f'{files[1]}: OK',f'{files[2]}: Empty file',f'{files[3]}: Permission denied',f'{files[4]}: Eicar-Test FOUND'])
+    run=Mock(return_value=SimpleNamespace(returncode=1,stdout=out,stderr=''))
+    monkeypatch.setattr('core.scanner.subprocess.run',run)
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
+    results=dict(scanner.scan_files(files+[isolated/'missing']))
+    assert run.call_count==1
+    assert [results[f]['status'] for f in files]==['clean','clean','clean','error','found']
+    assert results[files[4]]['virus']=='Eicar-Test'
+    assert results[isolated/'missing']['status']=='error'
+
+def test_cli_batch_never_reports_unlisted_files_clean(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/'one',isolated/'two']
+    for file in files:file.write_text('x')
+    monkeypatch.setattr('core.scanner.subprocess.run',Mock(return_value=SimpleNamespace(returncode=2,stdout='',stderr='No supported database files found')))
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
+    results=dict(scanner.scan_files(files))
+    assert all(r=={'status':'error','virus':'No supported database files found'} for r in results.values())
+
+def test_daemon_scans_files_individually(isolated):
+    from core.scanner import GuardianScanner
+    files=[isolated/'one',isolated/'two']
+    for file in files:file.write_text('x')
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=Mock()
+    scanner.clamd.scan_file.return_value=None
+    assert [r['status'] for _,r in scanner.scan_files(files)]==['clean','clean']
+    assert scanner.clamd.scan_file.call_count==2
+
+def test_clear_history_requires_confirmation(isolated,app,monkeypatch):
+    from ui.history import HistoryPage
+    from PySide6.QtWidgets import QMessageBox
+    page=HistoryPage();page.db.add_scan('/a','clean');page.refresh()
+    monkeypatch.setattr(QMessageBox,'question',lambda *a:QMessageBox.StandardButton.No)
+    page.clear_history();assert page.table.rowCount()==1
+    monkeypatch.setattr(QMessageBox,'question',lambda *a:QMessageBox.StandardButton.Yes)
+    page.clear_history();assert page.table.rowCount()==0
+    assert not page.clear_button.isEnabled()
+    page.db.close()
+
+def test_login_entry_starts_minimized(isolated):
+    from core.startup import set_startup,startup_path
+    set_startup(True)
+    assert '--minimized' in startup_path().read_text()

@@ -4,7 +4,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QHBoxLayout,
     QVBoxLayout,
-    QPushButton,
     QListWidget,
 )
 
@@ -55,7 +54,7 @@ class ProtectionCard(Card):
         self.status = QLabel("Checking monitoring status")
         self.status.setObjectName("status")
 
-        self.realtime = QLabel("Real-Time Protection     Checking")
+        self.realtime = QLabel("Real-Time Monitoring: Checking")
         self.definitions = QLabel("ClamAV definitions: managed by your system. Check engine details in Settings.")
         self.last_scan = QLabel("No scan completed in this session")
 
@@ -73,23 +72,6 @@ class ProtectionCard(Card):
         layout.addWidget(self.realtime)
         layout.addWidget(self.definitions)
         layout.addWidget(self.last_scan)
-
-
-class ScanButtonPanel(Card):
-
-    def __init__(self):
-        super().__init__()
-
-        layout = QHBoxLayout(self)
-        layout.setSpacing(15)
-
-        self.quick = QPushButton("Quick Scan")
-        self.full = QPushButton("Home Scan")
-        self.custom = QPushButton("Custom Scan")
-
-        layout.addWidget(self.quick)
-        layout.addWidget(self.full)
-        layout.addWidget(self.custom)
 
 
 class RecentActivityCard(Card):

@@ -20,4 +20,4 @@ def set_startup(enabled):
             value = value.replace(char, "\\" + char)
         return '"' + value + '"'
     folder.mkdir(parents=True, exist_ok=True)
-    entry.write_text("[Desktop Entry]\nType=Application\nName=Guardian Antivirus\nExec=" + quote(sys.executable) + " " + quote(ROOT / "guardian.py") + "\nTerminal=false\n")
+    entry.write_text("[Desktop Entry]\nType=Application\nName=Guardian Antivirus\nExec=" + quote(sys.executable) + " " + quote(ROOT / "guardian.py") + " --minimized\nTerminal=false\n")

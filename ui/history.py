@@ -1,6 +1,5 @@
 import csv
 from pathlib import Path
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QComboBox, QFileDialog, QMessageBox, QHeaderView
 from database.database import GuardianDatabase
 from ui.components import heading, label, button
@@ -43,8 +42,12 @@ class HistoryPage(QWidget):
         layout.addWidget(self.table, 1)
         self.empty = label("No scan results yet. Start a scan from Overview.")
         layout.addWidget(self.empty)
+        footer = QHBoxLayout()
         self.count = label("")
-        layout.addWidget(self.count)
+        footer.addWidget(self.count, 1)
+        self.clear_button = button("Clear history", self.clear_history, "danger")
+        footer.addWidget(self.clear_button)
+        layout.addLayout(footer)
         self.search.textChanged.connect(self.filter_table)
         self.filter.currentIndexChanged.connect(self.filter_table)
         self.refresh()
@@ -63,6 +66,8 @@ class HistoryPage(QWidget):
         self.table.setRowCount(len(rows))
         for row, values in enumerate(rows):
             for col, value in enumerate(values):
+                if col == 0:
+                    value = str(value).replace("T", " ")
                 if col == 2:
                     value = {"found": "Detection", "clean": "Clean", "error": "Error"}.get(value, value)
                 item = QTableWidgetItem(str(value or "—"))
@@ -72,6 +77,14 @@ class HistoryPage(QWidget):
         self.empty.setText("No results match your filters." if self.rows else "No scan results yet. Start a scan from Overview.")
         self.count.setText(f"Showing {len(rows)} of {len(self.rows)} recent results")
         self.export_button.setEnabled(bool(rows))
+        self.clear_button.setEnabled(bool(self.rows))
+
+    def clear_history(self):
+        if QMessageBox.question(self, "Clear history", "Delete all scan history? Quarantined files are not affected.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        self.db.clear_scans()
+        self.refresh()
+        self.count.setText("Scan history cleared")
 
     def write_csv(self, path):
         # Neutralise spreadsheet formulas in untrusted filenames and engine text.

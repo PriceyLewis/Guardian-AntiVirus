@@ -107,14 +107,18 @@ The implementation keeps scanning, monitoring, persistence, quarantine and notif
 
 - Quick Scan checks existing Downloads, Desktop and Documents folders.
 - Home Scan checks the user's home directory. Custom Scan checks a selected folder.
-- Symlinks and Guardian's quarantine directory are excluded.
+- Symlinks and Guardian's own quarantine, database and config files are excluded, so monitoring never rescans its own history writes.
+- The ClamAV daemon is tried on the Debian/Ubuntu, Arch and Fedora socket paths. Without it, files are batched into one `clamscan` run per 100 files instead of reloading signatures for every file.
 - Threats are moved into a private quarantine directory and recorded in SQLite.
 - Restore refuses to overwrite an existing destination.
-- Monitoring reacts asynchronously to creation, modification, move and close events; it is detection, not access prevention.
+- Monitoring reacts asynchronously to creation, modification, move and close events; it is detection, not access prevention. One write raising several events is scanned once.
 - Disabling monitoring pauses dispatch immediately and stops the observer cleanly on exit.
 - Cancelled scans are not presented as completed scans.
 - Definition freshness is not falsely asserted by the app.
 - CSV export escapes spreadsheet-formula prefixes in exported values.
+- History can be cleared after confirmation; quarantined files are unaffected.
+- Only one Guardian instance runs per data directory, so monitors never duplicate.
+- The login entry starts Guardian minimised to the tray (`--minimized`) when a tray is available.
 
 ## Tests
 
@@ -132,6 +136,7 @@ Regression coverage includes:
 - database thread ownership;
 - worker failures;
 - settings persistence and rollback;
+- batched clamscan parsing and monitoring self-exclusion;
 - navigation and scan lifecycle.
 
 Scanner tests use controlled engine responses, so they verify application behaviour rather than claiming to prove live antivirus detection.

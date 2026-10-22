@@ -6,7 +6,7 @@ from core.scanner import GuardianScanner
 from core.quarantine import QuarantineManager
 from core.notifier import GuardianNotifier
 from database.database import GuardianDatabase
-from core.paths import QUARANTINE
+from core.paths import QUARANTINE, is_guardian_storage
 
 
 class GuardianWatcher(FileSystemEventHandler):
@@ -15,6 +15,9 @@ class GuardianWatcher(FileSystemEventHandler):
         self.stopping = Event()
         self.quarantine = QuarantineManager()
         self.last_error = None
+        # (mtime, size) of the last scanned version, so one write that raises
+        # created, modified and closed events is only scanned once.
+        self.scanned = {}
 
     def on_created(self, event):
         if not event.is_directory:
@@ -36,7 +39,14 @@ class GuardianWatcher(FileSystemEventHandler):
         if self.stopping.is_set():
             return
         file = Path(path)
-        if file.is_symlink() or not file.is_file() or file.resolve().is_relative_to(QUARANTINE.resolve()):
+        try:
+            if file.is_symlink() or not file.is_file() or is_guardian_storage(file, QUARANTINE):
+                return
+            stat = file.stat()
+        except OSError:
+            return
+        signature = (stat.st_mtime_ns, stat.st_size)
+        if self.scanned.get(file) == signature:
             return
         db = None
         try:
@@ -49,6 +59,10 @@ class GuardianWatcher(FileSystemEventHandler):
             db.add_scan(str(file.absolute()), result["status"], result.get("virus"))
             if result["status"] == "error":
                 self.last_error = result.get("virus") or "Scan failed"
+            else:
+                if len(self.scanned) > 10000:
+                    self.scanned.clear()
+                self.scanned[file] = signature
             if result["status"] == "found":
                 self.quarantine.quarantine(file, result.get("virus"))
                 GuardianNotifier.notify("Guardian", f"Threat quarantined: {file.name}")

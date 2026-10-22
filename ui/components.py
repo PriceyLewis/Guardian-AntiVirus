@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QHBoxLayout, QPushButton
+from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QPushButton
 
 
 def label(text, name="muted"):

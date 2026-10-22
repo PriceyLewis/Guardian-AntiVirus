@@ -1,10 +1,9 @@
 import sqlite3
-from pathlib import Path
 from datetime import datetime
 
-from core.paths import DATA
+from core.paths import DATABASE_DIR
 
-DATABASE = DATA / "database" / "guardian.db"
+DATABASE = DATABASE_DIR / "guardian.db"
 
 
 class GuardianDatabase:
@@ -128,6 +127,10 @@ class GuardianDatabase:
             (quarantine_id,)
         )
 
+        self.conn.commit()
+
+    def clear_scans(self):
+        self.conn.execute("DELETE FROM scans")
         self.conn.commit()
 
     def close(self):
