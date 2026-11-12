@@ -506,3 +506,47 @@ def test_scan_history_is_committed_in_batches(isolated,monkeypatch):
     db=GuardianDatabase();assert db.get_scan_count()==20;db.close()
     assert len(commits)<20
 
+def test_dashboard_shows_whether_the_daemon_is_connected(isolated,app,monkeypatch):
+    import config
+    import ui.dashboard as dashboard
+    found=[None]
+    monkeypatch.setattr(dashboard,'daemon_socket',lambda timeout=5:found[0])
+    page=dashboard.DashboardPage()
+    assert 'daemon not found' in page.protection.engine.text()
+    found[0]='/run/clamav/clamd.ctl';page.refresh_dashboard()
+    assert page.protection.engine.text()=='Scan engine: ClamAV daemon connected · fast scanning'
+    config.save_config(dict(config.load_config(),archives=False));page.refresh_dashboard()
+    assert 'not used while Inspect archives is off' in page.protection.engine.text()
+    page.db.close()
+
+def test_daemon_socket_returns_first_answering_path(monkeypatch):
+    import core.scanner as engine_module
+    def client(filename,timeout):
+        if filename==engine_module.CLAMD_SOCKETS[0]:raise OSError('missing')
+        return SimpleNamespace(ping=lambda:True)
+    monkeypatch.setattr(engine_module.pyclamd,'ClamdUnixSocket',client)
+    assert engine_module.daemon_socket()==engine_module.CLAMD_SOCKETS[1]
+    monkeypatch.setattr(engine_module.pyclamd,'ClamdUnixSocket',Mock(side_effect=OSError))
+    assert engine_module.daemon_socket() is None and engine_module.GuardianScanner().clamd is None
+
+def test_scan_survives_file_names_that_are_not_utf8(isolated,monkeypatch):
+    import os
+    import core.scan_worker as worker_module
+    from core.scanner import GuardianScanner
+    from database.database import GuardianDatabase
+    folder=isolated/'files';folder.mkdir()
+    with open(os.fsencode(folder)+b'/bad-\xff.bin','wb') as file:file.write(b'x')
+    (folder/'good').write_text('x')
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=Mock()
+    scanner.clamd.scan_file.return_value=None
+    monkeypatch.setattr('core.scanner.subprocess.run',lambda *a,**k:SimpleNamespace(returncode=1,stdout=a[0][-1]+': Eicar-Test FOUND',stderr=''))
+    monkeypatch.setattr(worker_module,'GuardianScanner',lambda:scanner)
+    worker=worker_module.ScanWorker([folder]);results=[];summary={}
+    worker.result.connect(lambda path,status,virus:results.append((Path(path).name,status)));worker.summary.connect(summary.update)
+    worker.run()
+    # The unnameable file bypasses the daemon's text protocol, and the daemon stays in use.
+    assert sorted(results)==[('bad-\ufffd.bin','found'),('good','clean')] and scanner.clamd is not None
+    assert summary['scanned']==2 and summary['quarantined']==1 and summary['errors']==0
+    assert sorted(os.listdir(os.fsencode(folder)))==[b'good']
+    db=GuardianDatabase();assert db.get_scan_count()==2;db.close()
+

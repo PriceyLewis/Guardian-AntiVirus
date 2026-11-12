@@ -23,6 +23,26 @@ CLI_PROCESS_MEMORY = 2 * 1024 ** 3
 CLI_IDLE_TIMEOUT = 900
 
 
+def daemon_socket(timeout=5):
+    """Path of the first clamd socket that answers a ping, or None."""
+    for path in CLAMD_SOCKETS:
+        try:
+            if pyclamd.ClamdUnixSocket(filename=path, timeout=timeout).ping():
+                return path
+        except Exception:
+            pass
+    return None
+
+
+def describe_engine(connected, archives):
+    """Dashboard text saying which engine the next scan will use."""
+    if not connected:
+        return "Scan engine: ClamAV daemon not found · scans use clamscan, which is slower. Start the clamav-daemon service for faster scans."
+    if not archives:
+        return "Scan engine: ClamAV daemon connected, but not used while Inspect archives is off"
+    return "Scan engine: ClamAV daemon connected · fast scanning"
+
+
 class GuardianScanner:
     clamd = None
     # Path of the daemon's socket, when a real daemon answered.
@@ -32,15 +52,9 @@ class GuardianScanner:
 
     def __init__(self):
         self._local = local()
-        for path in CLAMD_SOCKETS:
-            try:
-                client = pyclamd.ClamdUnixSocket(filename=path, timeout=DAEMON_TIMEOUT)
-                if client.ping():
-                    self.clamd = client
-                    self.socket = path
-                    break
-            except Exception:
-                pass
+        self.socket = daemon_socket()
+        if self.socket:
+            self.clamd = pyclamd.ClamdUnixSocket(filename=self.socket, timeout=DAEMON_TIMEOUT)
 
     def scan_file(self, filepath):
         filepath = Path(filepath).absolute()
@@ -55,7 +69,7 @@ class GuardianScanner:
         try:
             result = subprocess.run(
                 ["clamscan", "--no-summary", "--scan-archive=" + ("yes" if archives else "no"), "--", str(filepath)],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
             )
             if result.returncode == 0:
                 return {"status": "clean", "virus": None}
@@ -70,7 +84,15 @@ class GuardianScanner:
     def _daemon_scan(self, path, client):
         """Ask clamd about one file; None means the command-line scanner should try."""
         try:
-            if not self.pass_fd:
+            # The daemon's text protocol cannot carry names that are not valid UTF-8.
+            try:
+                str(path).encode()
+                named = True
+            except UnicodeEncodeError:
+                named = False
+                if not self.socket:
+                    return None
+            if named and not self.pass_fd:
                 result = client.scan_file(str(path))
                 if result is None:
                     return {"status": "clean", "virus": None}

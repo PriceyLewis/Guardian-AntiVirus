@@ -57,11 +57,14 @@ class ProtectionCard(Card):
         self.realtime = QLabel("Real-Time Monitoring: Checking")
         self.definitions = QLabel("Checking ClamAV definitions…")
         self.definitions.setWordWrap(True)
+        self.engine = QLabel("Scan engine: Checking")
+        self.engine.setWordWrap(True)
         self.last_scan = QLabel("No scans yet")
 
         for label in (
             self.realtime,
             self.definitions,
+            self.engine,
             self.last_scan,
         ):
             label.setObjectName("subtitle")
@@ -72,6 +75,7 @@ class ProtectionCard(Card):
         layout.addSpacing(15)
         layout.addWidget(self.realtime)
         layout.addWidget(self.definitions)
+        layout.addWidget(self.engine)
         layout.addWidget(self.last_scan)
 
 
