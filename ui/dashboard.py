@@ -3,6 +3,8 @@ from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QProgressBar, QFileDialog
 from core.scan_manager import ScanManager
 from core.notifier import GuardianNotifier
+from core.scanner import daemon_socket, describe_engine
+from config import load_config
 from database.database import GuardianDatabase
 from ui.widgets import StatCard, ProtectionCard, RecentActivityCard
 from ui.components import heading, card, label, button
@@ -77,6 +79,8 @@ class DashboardPage(QWidget):
         self.threats_card.set_value(self.db.get_threat_count())
         self.quarantine_card.set_value(self.db.get_quarantine_count())
         self.activity.update_activity(self.db.recent_scans(5))
+        # A local socket answers at once; the short timeout covers a daemon that is still loading.
+        self.protection.engine.setText(describe_engine(bool(daemon_socket(timeout=1)), load_config()["archives"]))
         run = self.db.last_scan_run()
         if run:
             timestamp, name, scanned, found, errors, cancelled, duration = run

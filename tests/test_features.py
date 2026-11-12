@@ -506,3 +506,26 @@ def test_scan_history_is_committed_in_batches(isolated,monkeypatch):
     db=GuardianDatabase();assert db.get_scan_count()==20;db.close()
     assert len(commits)<20
 
+def test_dashboard_shows_whether_the_daemon_is_connected(isolated,app,monkeypatch):
+    import config
+    import ui.dashboard as dashboard
+    found=[None]
+    monkeypatch.setattr(dashboard,'daemon_socket',lambda timeout=5:found[0])
+    page=dashboard.DashboardPage()
+    assert 'daemon not found' in page.protection.engine.text()
+    found[0]='/run/clamav/clamd.ctl';page.refresh_dashboard()
+    assert page.protection.engine.text()=='Scan engine: ClamAV daemon connected · fast scanning'
+    config.save_config(dict(config.load_config(),archives=False));page.refresh_dashboard()
+    assert 'not used while Inspect archives is off' in page.protection.engine.text()
+    page.db.close()
+
+def test_daemon_socket_returns_first_answering_path(monkeypatch):
+    import core.scanner as engine_module
+    def client(filename,timeout):
+        if filename==engine_module.CLAMD_SOCKETS[0]:raise OSError('missing')
+        return SimpleNamespace(ping=lambda:True)
+    monkeypatch.setattr(engine_module.pyclamd,'ClamdUnixSocket',client)
+    assert engine_module.daemon_socket()==engine_module.CLAMD_SOCKETS[1]
+    monkeypatch.setattr(engine_module.pyclamd,'ClamdUnixSocket',Mock(side_effect=OSError))
+    assert engine_module.daemon_socket() is None and engine_module.GuardianScanner().clamd is None
+
