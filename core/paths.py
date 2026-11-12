@@ -33,3 +33,8 @@ def is_excluded(path, exclusions):
     """True when path is inside one of the user's excluded folders."""
     path = Path(path).resolve()
     return any(path.is_relative_to(Path(folder).resolve()) for folder in exclusions)
+
+
+def display(path):
+    """Text form of a path that is safe to store and show; bytes that are not UTF-8 become \ufffd."""
+    return str(path).encode("utf-8", "surrogateescape").decode("utf-8", "replace")

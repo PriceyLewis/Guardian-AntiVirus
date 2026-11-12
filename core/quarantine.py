@@ -4,7 +4,7 @@ import hashlib
 import shutil
 import uuid
 from core.log import log
-from core.paths import QUARANTINE
+from core.paths import QUARANTINE, display
 from database.database import GuardianDatabase
 
 
@@ -34,14 +34,15 @@ class QuarantineManager:
         try:
             shutil.move(str(source), str(destination))
             destination.chmod(0o600)
-            db.add_quarantine(str(source), str(destination), virus, sha256(destination), mode)
+            # A name that is not valid UTF-8 is recorded, and later restored, in its readable form.
+            db.add_quarantine(display(source), str(destination), virus, sha256(destination), mode)
         except Exception:
             if destination.exists() and not source.exists():
                 shutil.move(str(destination), str(source))
             raise
         finally:
             db.close()
-        log.info("Quarantined %s (%s)", source, virus)
+        log.info("Quarantined %s (%s)", display(source), virus)
         return destination
 
     def _record(self, db, record_id):

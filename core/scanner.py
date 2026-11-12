@@ -69,7 +69,7 @@ class GuardianScanner:
         try:
             result = subprocess.run(
                 ["clamscan", "--no-summary", "--scan-archive=" + ("yes" if archives else "no"), "--", str(filepath)],
-                capture_output=True, text=True, timeout=120,
+                capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
             )
             if result.returncode == 0:
                 return {"status": "clean", "virus": None}
@@ -84,7 +84,15 @@ class GuardianScanner:
     def _daemon_scan(self, path, client):
         """Ask clamd about one file; None means the command-line scanner should try."""
         try:
-            if not self.pass_fd:
+            # The daemon's text protocol cannot carry names that are not valid UTF-8.
+            try:
+                str(path).encode()
+                named = True
+            except UnicodeEncodeError:
+                named = False
+                if not self.socket:
+                    return None
+            if named and not self.pass_fd:
                 result = client.scan_file(str(path))
                 if result is None:
                     return {"status": "clean", "virus": None}

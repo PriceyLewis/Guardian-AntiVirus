@@ -4,7 +4,7 @@ from pathlib import Path
 from threading import Event
 from PySide6.QtCore import QObject, Signal
 import core.paths as paths
-from core.paths import QUARANTINE, is_excluded, is_guardian_storage
+from core.paths import QUARANTINE, display, is_excluded, is_guardian_storage
 from core.scanner import GuardianScanner
 from core.quarantine import QuarantineManager
 from core.notifier import GuardianNotifier
@@ -41,7 +41,7 @@ class ScanWorker(QObject):
             totals["errors"] += 1
             log.warning("%s: %s", self.name, message)
             self.error.emit(message)
-        log.info("%s started: %s", self.name, ", ".join(map(str, self.folders)))
+        log.info("%s started: %s", self.name, ", ".join(map(display, self.folders)))
         try:
             scanner = GuardianScanner()
             db = GuardianDatabase()
@@ -55,7 +55,7 @@ class ScanWorker(QObject):
                         files.add(target)
                     continue
                 if not target.is_dir():
-                    report_error(f"Not found or not accessible: {folder}")
+                    report_error(f"Not found or not accessible: {display(folder)}")
                     continue
                 # Directory entries already know their type, sparing a stat call per file.
                 pending = [target]
@@ -84,29 +84,31 @@ class ScanWorker(QObject):
             self.maximum.emit(len(files))
             def started(paths):
                 more = f"  (+{len(paths) - 1:,} more in this batch)" if len(paths) > 1 else ""
-                self.current_file.emit(str(paths[0]) + more)
+                self.current_file.emit(display(paths[0]) + more)
             committed = time.monotonic()
             for file, result in scanner.scan_files(sorted(files), started=started):
                 status, virus = result["status"], result.get("virus")
-                db.add_scan(str(file), status, virus, commit=False)
+                # File names are bytes on disk and need not be valid text.
+                shown = display(file)
+                db.add_scan(shown, status, virus, commit=False)
                 # An open write transaction would lock out the quarantine's own connection.
                 if status == "found" or time.monotonic() - committed >= COMMIT_INTERVAL:
                     db.commit()
                     committed = time.monotonic()
-                self.result.emit(str(file), status, virus or "")
+                self.result.emit(shown, status, virus or "")
                 if status in ("clean", "found"):
                     totals[status] += 1
                 if status == "error":
-                    report_error(f"{file}: {virus}")
+                    report_error(f"{shown}: {virus}")
                 if status == "found":
-                    log.warning("Detection %s in %s", virus, file)
+                    log.warning("Detection %s in %s", virus, shown)
                 if status == "found" and self.quarantine_found:
                     try:
                         quarantine.quarantine(file, virus)
                         totals["quarantined"] += 1
-                        GuardianNotifier.notify("Guardian", f"Threat quarantined: {file.name}")
+                        GuardianNotifier.notify("Guardian", f"Threat quarantined: {display(file.name)}")
                     except Exception as exc:
-                        report_error(f"Could not quarantine {file}: {exc}")
+                        report_error(f"Could not quarantine {shown}: {exc}")
                 scanned += 1
                 self.progress.emit(scanned)
                 # Checked after recording so the generator never starts more work.
