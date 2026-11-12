@@ -72,7 +72,9 @@ class GuardianDatabase:
 
         self.conn.commit()
 
-    def add_scan(self, filepath, status, virus=None):
+    def add_scan(self, filepath, status, virus=None, commit=True):
+        """Record one result. Bulk scans pass commit=False and call commit() themselves,
+        because committing every row forces a disk sync per file."""
         cursor = self.conn.cursor()
 
         cursor.execute("""
@@ -86,6 +88,10 @@ class GuardianDatabase:
             virus
         ))
 
+        if commit:
+            self.conn.commit()
+
+    def commit(self):
         self.conn.commit()
 
     def add_quarantine(self, original, quarantine, virus, sha256=None, mode=None):

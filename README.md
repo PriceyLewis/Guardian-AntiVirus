@@ -145,7 +145,7 @@ The implementation keeps scanning, monitoring, persistence, quarantine and notif
 - Home Scan checks the user's home directory. Custom Scan checks a selected folder, selected files, or files and folders dropped onto the window.
 - Real-time monitoring watches a user-editable folder list (Downloads, Desktop and Documents by default). It can be paused for an hour from the tray and resumes automatically.
 - Symlinks and Guardian's own quarantine, database and config files are excluded, so monitoring never rescans its own history writes.
-- The ClamAV daemon is tried on the Debian/Ubuntu, Arch and Fedora socket paths. Without it, files are batched into one `clamscan` run per 100 files instead of reloading signatures for every file.
+- The ClamAV daemon is tried on the Debian/Ubuntu, Arch and Fedora socket paths. Several files are sent to it at once, and files its own user cannot read are handed over as open descriptors rather than rescanned one by one. Without the daemon, a scan streams results from a single `clamscan` process (up to four for large scans with memory to spare) so signatures are loaded once.
 - Threats are moved into a private quarantine directory and recorded in SQLite.
 - Restore refuses to overwrite an existing destination.
 - Monitoring reacts asynchronously to creation, modification, move and close events; it is detection, not access prevention. One write raising several events is scanned once.

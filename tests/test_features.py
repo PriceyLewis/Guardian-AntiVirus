@@ -269,16 +269,27 @@ def test_worker_skips_database_folder(isolated,monkeypatch,app):
     worker.finished.connect(done.append);worker.run()
     assert done==[1]
 
+def fake_clamscan(monkeypatch,code,out='',err='',check=None):
+    """Stand in for the streaming clamscan processes; returns the list of command lines."""
+    import io
+    calls=[]
+    def popen(args,stdout=None,stderr=None,**kw):
+        if check:check()
+        calls.append((args,Path(args[-1].split('=',1)[1]).read_text().splitlines()))
+        stderr.write(err.encode())
+        return SimpleNamespace(stdout=io.StringIO(out),wait=lambda:code,poll=lambda:code,kill=lambda:None)
+    monkeypatch.setattr('core.scanner.subprocess.Popen',popen)
+    return calls
+
 def test_cli_batch_parses_each_file_with_one_process(isolated,monkeypatch):
     from core.scanner import GuardianScanner
     files=[isolated/name for name in ('clean','a: b','empty','denied','eicar')]
     for file in files:file.write_text('x')
-    out='\n'.join([f'{files[0]}: OK',f'{files[1]}: OK',f'{files[2]}: Empty file',f'{files[3]}: Permission denied',f'{files[4]}: Eicar-Test FOUND'])
-    run=Mock(return_value=SimpleNamespace(returncode=1,stdout=out,stderr=''))
-    monkeypatch.setattr('core.scanner.subprocess.run',run)
+    out='\n'.join([f'{files[0]}: OK',f'{files[1]}: OK',f'{files[2]}: Empty file',f'{files[3]}: Permission denied',f'{files[4]}: Eicar-Test FOUND'])+'\n'
+    calls=fake_clamscan(monkeypatch,1,out)
     scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
     results=dict(scanner.scan_files(files+[isolated/'missing']))
-    assert run.call_count==1
+    assert [listed for _,listed in calls]==[[str(f) for f in files]]
     assert [results[f]['status'] for f in files]==['clean','clean','clean','error','found']
     assert results[files[4]]['virus']=='Eicar-Test'
     assert results[isolated/'missing']['status']=='error'
@@ -287,10 +298,10 @@ def test_cli_batch_never_reports_unlisted_files_clean(isolated,monkeypatch):
     from core.scanner import GuardianScanner
     files=[isolated/'one',isolated/'two']
     for file in files:file.write_text('x')
-    monkeypatch.setattr('core.scanner.subprocess.run',Mock(return_value=SimpleNamespace(returncode=2,stdout='',stderr='No supported database files found')))
+    fake_clamscan(monkeypatch,2,err='No supported database files found\n')
     scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
     results=dict(scanner.scan_files(files))
-    assert all(r=={'status':'error','virus':'No supported database files found'} for r in results.values())
+    assert len(results)==2 and all(r=={'status':'error','virus':'No supported database files found'} for r in results.values())
 
 def test_daemon_scans_files_individually(isolated):
     from core.scanner import GuardianScanner
@@ -419,13 +430,11 @@ def test_batch_progress_reports_before_engine_runs(isolated,monkeypatch):
     files=[isolated/'one',isolated/'two']
     for file in files:file.write_text('x')
     started=[]
-    def run(args,**kw):
-        assert started
-        return SimpleNamespace(returncode=0,stdout='',stderr='')
-    monkeypatch.setattr('core.scanner.subprocess.run',run)
+    def check():assert started
+    calls=fake_clamscan(monkeypatch,0,check=check)
     scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=None
     list(scanner.scan_files(files,started=started.append))
-    assert started==[files]
+    assert started==[files] and len(calls)==1
 
 def test_shutdown_during_running_checks(isolated,app):
     import sys
@@ -434,3 +443,66 @@ def test_shutdown_during_running_checks(isolated,app):
     settings.start_check(sys.executable,['-c','import time; time.sleep(10)'],'engine')
     window.shutdown()
     assert settings.process is None and window.definitions_process is None
+
+def test_large_cli_scans_share_few_processes(isolated,monkeypatch):
+    import core.scanner as engine_module
+    files=[isolated/f'f{i}' for i in range(7)]
+    for file in files:file.write_text('x')
+    monkeypatch.setattr(engine_module,'cli_processes',lambda count:3)
+    calls=fake_clamscan(monkeypatch,0)
+    scanner=engine_module.GuardianScanner.__new__(engine_module.GuardianScanner);scanner.clamd=None
+    results=dict(scanner.scan_files(files))
+    assert len(calls)==3 and sorted(name for _,listed in calls for name in listed)==sorted(map(str,files))
+    assert len(results)==7 and all(r['status']=='clean' for r in results.values())
+
+def test_cli_process_count_respects_size_and_memory(monkeypatch):
+    import core.scanner as engine_module
+    monkeypatch.setattr(engine_module.os,'cpu_count',lambda:8)
+    assert engine_module.cli_processes(10)==1
+    assert 1<=engine_module.cli_processes(10**6)<=engine_module.CLI_MAX_PROCESSES
+
+def test_daemon_leaves_unanswered_files_to_one_clamscan(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/f'f{i}' for i in range(6)]
+    for file in files:file.write_text('x')
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=Mock()
+    scanner.clamd.scan_file.side_effect=lambda name:None if name.endswith(('f0','f1')) else {name:('ERROR','Permission denied')}
+    calls=fake_clamscan(monkeypatch,0)
+    results=dict(scanner.scan_files(files))
+    assert len(calls)==1 and sorted(calls[0][1])==[str(f) for f in files[2:]]
+    assert all(results[f]['status']=='clean' for f in files)
+
+def test_daemon_gets_a_descriptor_for_files_it_cannot_open(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    files=[isolated/'one',isolated/'two']
+    for file in files:file.write_text('x')
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=Mock();scanner.socket='/nonexistent'
+    scanner.clamd.scan_file.side_effect=lambda name:{name:('ERROR','Permission denied')}
+    handed=[]
+    monkeypatch.setattr(scanner,'_scan_descriptor',lambda fd:handed.append(fd) or 'Eicar-Test FOUND')
+    assert scanner.scan_file(files[0])=={'status':'found','virus':'Eicar-Test'}
+    assert scanner.scan_file(files[1])['status']=='found'
+    # After the first refusal the path-based request is skipped.
+    assert len(handed)==2 and scanner.clamd.scan_file.call_count==1
+
+def test_closing_a_daemon_scan_stops_submitting_files(isolated):
+    import core.scanner as engine_module
+    files=[isolated/f'f{i}' for i in range(200)]
+    for file in files:file.write_text('x')
+    scanner=engine_module.GuardianScanner.__new__(engine_module.GuardianScanner);scanner.clamd=Mock()
+    scanner.clamd.scan_file.return_value=None
+    results=scanner.scan_files(files);next(results);results.close()
+    assert scanner.clamd.scan_file.call_count<=2*engine_module.DAEMON_WORKERS
+
+def test_scan_history_is_committed_in_batches(isolated,monkeypatch):
+    import core.scan_worker as worker_module
+    from database.database import GuardianDatabase
+    (isolated/'files').mkdir()
+    for i in range(20):(isolated/'files'/f'f{i}').write_text('x')
+    commits=[];commit=GuardianDatabase.commit
+    monkeypatch.setattr(GuardianDatabase,'commit',lambda self:commits.append(1) or commit(self))
+    monkeypatch.setattr(worker_module,'GuardianScanner',lambda:SimpleNamespace(scan_files=lambda paths,started=None:((p,{'status':'clean','virus':None}) for p in paths)))
+    worker_module.ScanWorker([isolated/'files']).run()
+    db=GuardianDatabase();assert db.get_scan_count()==20;db.close()
+    assert len(commits)<20
+

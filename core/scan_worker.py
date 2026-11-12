@@ -3,12 +3,16 @@ import time
 from pathlib import Path
 from threading import Event
 from PySide6.QtCore import QObject, Signal
+import core.paths as paths
 from core.paths import QUARANTINE, is_excluded, is_guardian_storage
 from core.scanner import GuardianScanner
 from core.quarantine import QuarantineManager
 from core.notifier import GuardianNotifier
 from core.log import log
 from database.database import GuardianDatabase
+
+# Seconds of scan history held in one database transaction.
+COMMIT_INTERVAL = 1
 
 
 class ScanWorker(QObject):
@@ -44,8 +48,6 @@ class ScanWorker(QObject):
             quarantine = QuarantineManager()
             exclusions = db.get_exclusions()
             files = set()
-            def walk_error(exc):
-                report_error(str(exc))
             for folder in self.folders:
                 target = Path(folder).absolute()
                 if not target.is_symlink() and target.is_file():
@@ -55,25 +57,42 @@ class ScanWorker(QObject):
                 if not target.is_dir():
                     report_error(f"Not found or not accessible: {folder}")
                     continue
-                for directory, dirs, names in os.walk(folder, onerror=walk_error, followlinks=False):
+                # Directory entries already know their type, sparing a stat call per file.
+                pending = [target]
+                while pending:
                     if self.cancelled.is_set():
                         return
-                    base = Path(directory)
+                    base = pending.pop()
                     if is_guardian_storage(base, QUARANTINE) or is_excluded(base, exclusions):
-                        dirs[:] = []
                         continue
-                    dirs[:] = [d for d in dirs if not (base / d).is_symlink()]
-                    for name in names:
-                        path = (base / name).absolute()
-                        if not path.is_symlink() and path.is_file() and not is_guardian_storage(path, QUARANTINE):
-                            files.add(path)
+                    try:
+                        with os.scandir(base) as entries:
+                            entries = list(entries)
+                    except OSError as exc:
+                        report_error(str(exc))
+                        continue
+                    # Past the checks above, only Guardian's own data folder holds files to skip.
+                    own = base.resolve() == paths.DATA.resolve()
+                    for entry in entries:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                pending.append(base / entry.name)
+                            elif entry.is_file(follow_symlinks=False) and not (own and is_guardian_storage(entry.path, QUARANTINE)):
+                                files.add(base / entry.name)
+                        except OSError as exc:
+                            report_error(str(exc))
             self.maximum.emit(len(files))
             def started(paths):
                 more = f"  (+{len(paths) - 1:,} more in this batch)" if len(paths) > 1 else ""
                 self.current_file.emit(str(paths[0]) + more)
+            committed = time.monotonic()
             for file, result in scanner.scan_files(sorted(files), started=started):
                 status, virus = result["status"], result.get("virus")
-                db.add_scan(str(file), status, virus)
+                db.add_scan(str(file), status, virus, commit=False)
+                # An open write transaction would lock out the quarantine's own connection.
+                if status == "found" or time.monotonic() - committed >= COMMIT_INTERVAL:
+                    db.commit()
+                    committed = time.monotonic()
                 self.result.emit(str(file), status, virus or "")
                 if status in ("clean", "found"):
                     totals[status] += 1
