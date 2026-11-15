@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from threading import Event
 from PySide6.QtCore import QObject, Signal
@@ -12,7 +13,7 @@ from core.log import log
 from config import load_config
 from database.database import GuardianDatabase
 
-# Seconds of scan history held in one database transaction.
+# Seconds of scan results collected before they are written to the database together.
 COMMIT_INTERVAL = 1
 
 
@@ -45,6 +46,11 @@ class ScanWorker(QObject):
             totals["errors"] += 1
             log.warning("%s: %s", self.name, message)
             self.error.emit(message)
+        # Results waiting to be written; nothing is held open in the database meanwhile.
+        rows, clean, stale = [], [], []
+        def flush():
+            db.record_scans(rows, clean, stale)
+            rows.clear(), clean.clear(), stale.clear()
         log.info("%s started: %s", self.name, ", ".join(map(display, self.folders)))
         try:
             scanner = GuardianScanner()
@@ -87,8 +93,9 @@ class ScanWorker(QObject):
                             report_error(str(exc))
             self.maximum.emit(len(files))
             # Files the same engine and signatures already found clean, and unchanged since, are not rescanned.
+            # A scan that rechecks everything still records what it found clean, for later scans.
             skip = load_config()["skip_unchanged"] if self.skip_unchanged is None else self.skip_unchanged
-            key = getattr(scanner, "engine_key", lambda: None)() if skip else None
+            key = getattr(scanner, "engine_key", lambda: None)()
             if key:
                 db.cache_engine(key)
             signatures = {}
@@ -103,7 +110,7 @@ class ScanWorker(QObject):
                         signatures[file] = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
                     except OSError:
                         pass
-                    if file in signatures and db.cached_clean(str(file)) == signatures[file]:
+                    if skip and file in signatures and db.cached_clean(str(file)) == signatures[file]:
                         totals["clean"] += 1
                         totals["unchanged"] += 1
                         scanned += 1
@@ -126,16 +133,16 @@ class ScanWorker(QObject):
                         detections.append(digest)
                     except OSError:
                         pass
-                db.add_scan(shown, status, virus, commit=False, sha256=digest)
+                rows.append((datetime.now().isoformat(timespec="seconds"), shown, status, virus, digest))
                 if key and shown == str(file):
                     # The signature predates the scan, so a file changed meanwhile is checked again next time.
                     if status == "clean" and file in signatures:
-                        db.remember_clean(shown, signatures[file])
+                        clean.append((shown, signatures[file]))
                     else:
-                        db.forget_clean(shown)
-                # An open write transaction would lock out the quarantine's own connection.
+                        stale.append(shown)
+                # Written before quarantining, which records the file through its own connection.
                 if status == "found" or time.monotonic() - committed >= COMMIT_INTERVAL:
-                    db.commit()
+                    flush()
                     committed = time.monotonic()
                 self.result.emit(shown, status, virus or "")
                 if status in ("clean", "found"):
@@ -163,6 +170,7 @@ class ScanWorker(QObject):
             cancelled = self.cancelled.is_set()
             if db:
                 try:
+                    flush()
                     db.add_scan_run(self.name, scanned, totals["found"], totals["errors"], cancelled, duration)
                 except Exception as exc:
                     report_error(f"Could not record scan: {exc}")

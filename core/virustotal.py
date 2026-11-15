@@ -22,6 +22,9 @@ def link_url(text):
     text = (text or "").strip()
     if DOMAIN.fullmatch(text):
         return SITE + "domain/" + text.lower()
+    # People paste addresses without the scheme, e.g. example.com/download.
+    if "://" not in text and DOMAIN.fullmatch(text.split("/", 1)[0].split(":", 1)[0]):
+        text = "http://" + text
     try:
         parts = urlsplit(text)
         host = parts.hostname

@@ -277,7 +277,7 @@ def fake_clamscan(monkeypatch,code,out='',err='',check=None):
         if check:check()
         calls.append((args,Path(args[-1].split('=',1)[1]).read_text().splitlines()))
         stderr.write(err.encode())
-        return SimpleNamespace(stdout=io.StringIO(out),wait=lambda:code,poll=lambda:code,kill=lambda:None)
+        return SimpleNamespace(stdout=io.BytesIO(out.encode('utf-8','surrogateescape')),wait=lambda:code,poll=lambda:code,kill=lambda:None)
     monkeypatch.setattr('core.scanner.subprocess.Popen',popen)
     return calls
 
@@ -513,7 +513,7 @@ def test_dashboard_shows_whether_the_daemon_is_connected(isolated,app,monkeypatc
     monkeypatch.setattr(dashboard,'daemon_socket',lambda timeout=5:found[0])
     page=dashboard.DashboardPage()
     assert 'daemon not found' in page.protection.engine.text()
-    found[0]='/run/clamav/clamd.ctl';page.refresh_dashboard()
+    found[0]='/run/clamav/clamd.ctl';page.daemon_checked=-99;page.refresh_dashboard()
     assert page.protection.engine.text()=='Scan engine: ClamAV daemon connected · fast scanning'
     config.save_config(dict(config.load_config(),archives=False));page.refresh_dashboard()
     assert 'not used while Inspect archives is off' in page.protection.engine.text()

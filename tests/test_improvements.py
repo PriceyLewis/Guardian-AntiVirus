@@ -50,12 +50,16 @@ def test_unchanged_cache_is_dropped_for_new_signatures_and_can_be_bypassed(isola
     config.save_config(dict(config.load_config(),skip_unchanged=False))
     run_worker(monkeypatch,engine,[folder]);assert len(engine.seen)==3
     config.save_config(dict(config.load_config(),skip_unchanged=True))
+    # Scans that recheck everything still record results for later ones.
+    (folder/'late').write_text('late');run_worker(monkeypatch,engine,[folder],skip_unchanged=False)
+    assert len(engine.seen)==5 and run_worker(monkeypatch,engine,[folder])['unchanged']==2 and len(engine.seen)==5
+    (folder/'late').unlink()
     engine.key='ClamAV 1/2|test'
-    assert run_worker(monkeypatch,engine,[folder])['unchanged']==0 and len(engine.seen)==4
+    assert run_worker(monkeypatch,engine,[folder])['unchanged']==0 and len(engine.seen)==6
     # An engine that cannot name its version never has results remembered.
     engine.key=None
     run_worker(monkeypatch,engine,[folder]);run_worker(monkeypatch,engine,[folder])
-    assert len(engine.seen)==6
+    assert len(engine.seen)==8
 
 def test_swapped_file_with_restored_size_and_mtime_is_rescanned(isolated,monkeypatch):
     folder=isolated/'files';folder.mkdir();file=folder/'a';file.write_text('safe')
@@ -136,7 +140,7 @@ def test_dashboard_offers_daemon_setup_only_when_it_is_missing(isolated,app,monk
     from PySide6.QtWidgets import QPlainTextEdit
     page.show_daemon_steps();assert 'ClamAV daemon' in page.steps_dialog.findChild(QPlainTextEdit).toPlainText()
     page.steps_dialog.close()
-    found[0]='/run/clamav/clamd.ctl';page.refresh_dashboard();assert page.daemon_button.isHidden()
+    found[0]='/run/clamav/clamd.ctl';page.daemon_checked=-99;page.refresh_dashboard();assert page.daemon_button.isHidden()
     page.db.close()
 
 def test_dashboard_reports_unchanged_files_and_looks_up_detections(isolated,app,monkeypatch):
@@ -247,3 +251,57 @@ def test_cli_full_flag_rechecks_unchanged_files(isolated,monkeypatch):
     assert '1 unchanged since last scan, not rechecked' in out.getvalue() and len(engine.seen)==1
     out=io.StringIO();assert run_scan(['--full','--report-only',str(file)],out,io.StringIO())==0
     assert 'unchanged' not in out.getvalue() and len(engine.seen)==2
+
+def test_other_writers_are_not_locked_out_while_a_file_is_being_scanned(isolated,monkeypatch):
+    import core.scan_worker as worker_module
+    import database.database as database
+    from threading import Thread
+    folder=isolated/'files';folder.mkdir()
+    for name in ('a','b','c'):(folder/name).write_text(name)
+    waited=[]
+    def scan_files(paths,started=None):
+        for index,path in enumerate(paths):
+            if index==2:
+                # Stand in for a slow file: meanwhile the interface or monitor writes to the database.
+                other=sqlite3.connect(database.DATABASE,timeout=0.2);began=time.monotonic()
+                other.execute("INSERT INTO exclusions(path) VALUES ('/elsewhere')");other.commit();other.close()
+                waited.append(time.monotonic()-began)
+            yield path,{'status':'clean','virus':None}
+    monkeypatch.setattr(worker_module,'GuardianScanner',lambda:SimpleNamespace(scan_files=scan_files))
+    worker=worker_module.ScanWorker([folder]);errors=[];worker.error.connect(errors.append);worker.run()
+    assert waited and not errors
+    db=database.GuardianDatabase();assert db.get_scan_count()==3 and db.get_exclusions()==['/elsewhere'];db.close()
+
+def test_link_lookup_accepts_addresses_without_a_scheme():
+    from core import virustotal
+    assert virustotal.link_url('example.com/download?x=1')=='https://www.virustotal.com/gui/search/http%253A%252F%252Fexample.com%252Fdownload%253Fx%253D1'
+    assert virustotal.link_url('example.com:8080/a').endswith('example.com%253A8080%252Fa')
+    assert virustotal.link_url('just words/here') is None and virustotal.link_url('/etc/passwd') is None
+
+def test_hostile_file_names_never_reach_the_daemon_by_name(isolated,monkeypatch):
+    from core.scanner import GuardianScanner
+    decoy=isolated/'decoy';decoy.write_text('harmless')
+    evil=isolated/'decoy\n.com';evil.write_text('threat')
+    scanner=GuardianScanner.__new__(GuardianScanner);scanner.clamd=Mock()
+    # A daemon that answers about some other file is not believed.
+    scanner.clamd.scan_file.side_effect=lambda name:{str(decoy):('OK',None)}
+    monkeypatch.setattr('core.scanner.subprocess.run',lambda *a,**k:SimpleNamespace(returncode=1,stdout=a[0][-1]+': Eicar-Test FOUND',stderr=''))
+    assert scanner.scan_file(evil)['status']=='found'
+    assert not any(evil.name in str(call) for call in scanner.clamd.scan_file.call_args_list)
+    other=isolated/'plain';other.write_text('x')
+    assert scanner.scan_file(other)['status']=='found' and scanner.scan_file(decoy)['status']=='clean'
+
+def test_long_paths_and_carriage_returns_are_scanned_without_the_daemon(isolated,monkeypatch):
+    import core.scanner as engine_module
+    monkeypatch.setattr(engine_module,'CLI_LIST_PATH_LIMIT',len(str(isolated))+12)
+    short=[isolated/'a',isolated/'cr\rname'];long=isolated/('long'*10)
+    for file in short+[long]:file.write_text('x')
+    out=''.join(f'{file}: OK\n' for file in short)
+    from test_features import fake_clamscan
+    calls=fake_clamscan(monkeypatch,0,out)
+    single=[];monkeypatch.setattr('core.scanner.subprocess.run',lambda args,**k:single.append(args[-1]) or SimpleNamespace(returncode=0,stdout='',stderr=''))
+    scanner=engine_module.GuardianScanner.__new__(engine_module.GuardianScanner);scanner.clamd=None
+    results=dict(scanner.scan_files(short+[long]))
+    assert single==[str(long)] and len(calls)==1 and len(calls[0][1])==3
+    assert all(results[file]['status']=='clean' for file in short+[long])
+

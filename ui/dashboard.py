@@ -1,3 +1,4 @@
+import time
 from datetime import datetime
 from threading import Thread
 from PySide6.QtCore import Qt, Signal, Slot
@@ -26,6 +27,8 @@ class DashboardPage(QWidget):
         self.scan_active = False
         self.scan_name = "Scan"
         self.closing = False
+        self.daemon_connected = False
+        self.daemon_checked = -DAEMON_CHECK_INTERVAL
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(18)
@@ -109,8 +112,11 @@ class DashboardPage(QWidget):
         self.threats_card.set_value(self.db.get_threat_count())
         self.quarantine_card.set_value(self.db.get_quarantine_count())
         self.activity.update_activity(self.db.recent_scans(5))
-        # A local socket answers at once; the short timeout covers a daemon that is still loading.
-        connected = bool(daemon_socket(timeout=1))
+        # This runs every few seconds on the interface thread, so ask the daemon only now and then.
+        if time.monotonic() - self.daemon_checked >= DAEMON_CHECK_INTERVAL:
+            self.daemon_connected = bool(daemon_socket(timeout=0.5))
+            self.daemon_checked = time.monotonic()
+        connected = self.daemon_connected
         self.protection.engine.setText(describe_engine(connected, load_config()["archives"]))
         self.daemon_button.setVisible(not connected)
         run = self.db.last_scan_run()
@@ -251,6 +257,8 @@ class DashboardPage(QWidget):
     def scan_finished(self, scanned):
         if self.closing:
             return
+        # The scan itself may have found the daemon gone.
+        self.daemon_checked = -DAEMON_CHECK_INTERVAL
         self.scan_active = False
         self.buttons.setEnabled(True)
         self.cancel_button.setEnabled(False)
@@ -276,6 +284,8 @@ class DashboardPage(QWidget):
             GuardianNotifier.notify("Guardian", f"{self.scan_name}: {state.lower()}, {scanned:,} file{'s' if scanned != 1 else ''} checked, {found}.")
 
 
+# Seconds between checks for the daemon's socket.
+DAEMON_CHECK_INTERVAL = 10
 # Detections opened as VirusTotal reports by one click.
 MAX_REPORTS = 3
 

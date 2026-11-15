@@ -87,25 +87,22 @@ class GuardianDatabase:
 
         self.conn.commit()
 
-    def add_scan(self, filepath, status, virus=None, commit=True, sha256=None):
-        """Record one result. Bulk scans pass commit=False and call commit() themselves,
-        because committing every row forces a disk sync per file."""
-        cursor = self.conn.cursor()
+    def add_scan(self, filepath, status, virus=None, sha256=None):
+        self.record_scans([(datetime.now().isoformat(timespec="seconds"), filepath, status, virus, sha256)])
 
-        cursor.execute("""
-        INSERT INTO scans
-        (timestamp, filepath, status, virus, sha256)
-        VALUES (?, ?, ?, ?, ?)
-        """, (
-            datetime.now().isoformat(timespec="seconds"),
-            filepath,
-            status,
-            virus,
-            sha256
-        ))
+    def record_scans(self, rows, clean=(), stale=()):
+        """Store (timestamp, filepath, status, virus, sha256) rows in one short transaction.
 
-        if commit:
-            self.conn.commit()
+        clean holds (path, signature) pairs to remember as unchanged-and-clean;
+        stale holds paths to forget. Bulk scans collect results and call this
+        about once a second: a commit per file forces a disk sync each time,
+        while a transaction left open between results would lock out other writers.
+        """
+        self.conn.executemany("INSERT INTO scans(timestamp, filepath, status, virus, sha256) VALUES (?, ?, ?, ?, ?)", rows)
+        self.conn.executemany("INSERT OR REPLACE INTO clean_cache(path, size, mtime, ctime, inode) VALUES (?, ?, ?, ?, ?)",
+                              [(path, *signature) for path, signature in clean])
+        self.conn.executemany("DELETE FROM clean_cache WHERE path=?", [(path,) for path in stale])
+        self.commit()
 
     def commit(self):
         self.conn.commit()
@@ -133,12 +130,6 @@ class GuardianDatabase:
     def cached_clean(self, path):
         """(size, mtime, ctime, inode) the file had when it was last found clean, or None."""
         return self.conn.execute("SELECT size, mtime, ctime, inode FROM clean_cache WHERE path=?", (path,)).fetchone()
-
-    def remember_clean(self, path, signature):
-        self.conn.execute("INSERT OR REPLACE INTO clean_cache(path, size, mtime, ctime, inode) VALUES (?, ?, ?, ?, ?)", (path, *signature))
-
-    def forget_clean(self, path):
-        self.conn.execute("DELETE FROM clean_cache WHERE path=?", (path,))
 
     def clear_clean_cache(self):
         self.conn.execute("DELETE FROM clean_cache")

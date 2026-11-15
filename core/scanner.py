@@ -1,12 +1,13 @@
 import hashlib
 import os
 import queue
+import re
 import socket
+import stat
 import subprocess
 import tempfile
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
-from threading import Thread, local
+from threading import Event, Lock, Semaphore, Thread, local
 import pyclamd
 from config import load_config
 
@@ -14,6 +15,7 @@ from config import load_config
 CLAMD_SOCKETS = ("/var/run/clamav/clamd.ctl", "/run/clamav/clamd.ctl", "/run/clamd.scan/clamd.sock")
 # Where distributions keep signature databases; their contents are part of the engine's identity.
 DATABASE_DIRS = ("/var/lib/clamav",)
+CONTROL = re.compile(r"[\x00-\x1f]")
 DAEMON_TIMEOUT = 120
 # clamd scans on several threads (MaxThreads); keep a few of them busy.
 DAEMON_WORKERS = min(8, max(2, os.cpu_count() or 2))
@@ -22,6 +24,8 @@ DAEMON_WORKERS = min(8, max(2, os.cpu_count() or 2))
 CLI_MAX_PROCESSES = 4
 CLI_MIN_SHARE = 500
 CLI_PROCESS_MEMORY = 2 * 1024 ** 3
+# clamscan reads its file list into a fixed buffer of about a thousand bytes per line.
+CLI_LIST_PATH_LIMIT = 900
 # Seconds without any output before a clamscan run is abandoned.
 CLI_IDLE_TIMEOUT = 900
 
@@ -110,19 +114,21 @@ class GuardianScanner:
     def _daemon_scan(self, path, client):
         """Ask clamd about one file; None means the command-line scanner should try."""
         try:
-            # The daemon's text protocol cannot carry names that are not valid UTF-8.
+            # The daemon's line-based text protocol cannot carry names that are not valid
+            # UTF-8, and a newline would end the request early, naming a different file.
             try:
                 str(path).encode()
-                named = True
+                named = not CONTROL.search(str(path))
             except UnicodeEncodeError:
                 named = False
-                if not self.socket:
-                    return None
+            if not named and not self.socket:
+                return None
             if named and not self.pass_fd:
                 result = client.scan_file(str(path))
                 if result is None:
                     return {"status": "clean", "virus": None}
-                status, detail = next(iter(result.values()))
+                # Only an answer about this very file counts.
+                status, detail = result.get(str(path), ("ERROR", None))
                 if status == "FOUND":
                     return {"status": "found", "virus": detail}
                 if status == "OK":
@@ -180,35 +186,61 @@ class GuardianScanner:
     def _scan_daemon(self, paths, started=None):
         """Yield daemon results; return the paths left for clamscan."""
         leftover = []
-        running = {}
-        with ThreadPoolExecutor(DAEMON_WORKERS) as pool:
+        results = queue.Queue()
+        take = Lock()
+        stop = Event()
+        # Files taken but not yet yielded; bounds the work done ahead of a consumer that stops.
+        ahead = Semaphore(2 * DAEMON_WORKERS)
+
+        def work():
             try:
                 while True:
-                    # Only as many files as workers are in flight, so closing stops promptly.
-                    while self.clamd and len(running) < DAEMON_WORKERS:
-                        path = next(paths, None)
-                        if path is None:
-                            break
-                        if started:
-                            started([path])
-                        running[pool.submit(self._daemon_check, path)] = path
-                    if not running:
-                        break
-                    for future in wait(running, return_when=FIRST_COMPLETED).done:
-                        path = running.pop(future)
-                        result = future.result()
-                        if result is None:
-                            leftover.append(path)
-                        else:
-                            yield path, result
+                    while not ahead.acquire(timeout=0.1):
+                        if stop.is_set():
+                            return
+                    with take:
+                        path = None if stop.is_set() or not self.clamd else next(paths, None)
+                    if path is None:
+                        return
+                    if started:
+                        started([path])
+                    try:
+                        result = self._daemon_check(path)
+                    except Exception:
+                        result = None
+                    results.put((path, result))
             finally:
-                for future in running:
-                    future.cancel()
+                results.put(None)
+
+        threads = [Thread(target=work, name="guardian-daemon-scan", daemon=True) for _ in range(DAEMON_WORKERS)]
+        for thread in threads:
+            thread.start()
+        try:
+            active = len(threads)
+            while active:
+                item = results.get()
+                if item is None:
+                    active -= 1
+                    continue
+                ahead.release()
+                path, result = item
+                if result is None:
+                    leftover.append(path)
+                else:
+                    yield path, result
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join()
         leftover.extend(paths)
         return leftover
 
     def _daemon_check(self, path):
-        if path.is_symlink() or not path.is_file():
+        try:
+            regular = stat.S_ISREG(os.lstat(path).st_mode)
+        except OSError:
+            regular = False
+        if not regular:
             return {"status": "error", "virus": "Not a regular file"}
         return self._daemon_scan(path, self._thread_client())
 
@@ -225,8 +257,9 @@ class GuardianScanner:
             started(paths)
         pending = {}
         for path in paths:
-            # Newlines would make clamscan's line-based output ambiguous.
-            if len(paths) == 1 or "\n" in str(path):
+            # Newlines would make clamscan's line-based output ambiguous, and it
+            # truncates long lines of a file list; such paths go on a command line instead.
+            if len(paths) == 1 or "\n" in str(path) or len(os.fsencode(path)) > CLI_LIST_PATH_LIMIT:
                 yield path, self.scan_file(path)
             elif path.is_symlink() or not path.is_file():
                 yield path, {"status": "error", "virus": "Not a regular file"}
@@ -249,7 +282,7 @@ class GuardianScanner:
                     process = subprocess.Popen(
                         ["clamscan", "--no-summary", "--stdout", "--scan-archive=" + ("yes" if archives else "no"),
                          "--file-list=" + listing.name],
-                        stdout=subprocess.PIPE, stderr=errors, encoding="utf-8", errors="surrogateescape",
+                        stdout=subprocess.PIPE, stderr=errors,
                     )
                 except OSError as exc:
                     listing.close()
@@ -308,8 +341,9 @@ class GuardianScanner:
     @staticmethod
     def _read_lines(index, process, lines):
         try:
+            # Read as bytes: text mode would also split lines at a carriage return in a file name.
             for line in process.stdout:
-                lines.put((index, line))
+                lines.put((index, line.decode("utf-8", "surrogateescape")))
         except (OSError, ValueError):
             pass
         lines.put((index, None))
