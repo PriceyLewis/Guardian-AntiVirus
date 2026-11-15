@@ -1,16 +1,22 @@
 from datetime import datetime
-from PySide6.QtCore import Slot
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QProgressBar, QFileDialog
+from threading import Thread
+from PySide6.QtCore import Signal, Slot
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QProgressBar, QFileDialog, QLineEdit
 from core.scan_manager import ScanManager
 from core.notifier import GuardianNotifier
 from core.scanner import daemon_socket, describe_engine
 from config import load_config
 from database.database import GuardianDatabase
 from ui.widgets import StatCard, ProtectionCard, RecentActivityCard
-from ui.components import heading, card, label, button
+from core import virustotal
+from core.quarantine import sha256
+from ui.components import heading, card, label, button, open_in_browser
 
 
 class DashboardPage(QWidget):
+    # Path and SHA-256 (or empty text and an error) of a file fingerprinted for a lookup.
+    fingerprinted = Signal(str, str, str)
+
     def __init__(self):
         super().__init__()
         self.db = GuardianDatabase()
@@ -68,6 +74,22 @@ class DashboardPage(QWidget):
         self.error_text.setObjectName("warning")
         self.error_text.hide()
         group.addWidget(self.error_text)
+        layout.addWidget(frame)
+        frame, group = card("Second opinion", "Look a file or link up on VirusTotal, which shows what about 70 antivirus engines say. Opens in your browser; files are never uploaded, only their SHA-256 fingerprint is sent.")
+        row = QHBoxLayout()
+        self.lookup_file_button = button("Look up a file…", self.lookup_file)
+        row.addWidget(self.lookup_file_button)
+        self.link = QLineEdit()
+        self.link.setPlaceholderText("…or paste a link, e.g. https://example.com/download")
+        self.link.setClearButtonEnabled(True)
+        self.link.returnPressed.connect(self.lookup_link)
+        row.addWidget(self.link, 1)
+        row.addWidget(button("Look up link", self.lookup_link))
+        group.addLayout(row)
+        self.lookup_text = label("")
+        self.lookup_text.hide()
+        group.addWidget(self.lookup_text)
+        self.fingerprinted.connect(self.file_fingerprinted)
         layout.addWidget(frame)
         self.activity = RecentActivityCard()
         layout.addWidget(self.activity)
@@ -131,6 +153,51 @@ class DashboardPage(QWidget):
     def scan_paths(self, paths):
         """Scan any mix of files and folders, e.g. dropped onto the window."""
         self.start_scan(lambda **kwargs: self.scan_manager.scan_paths(paths, **kwargs), "Custom scan")
+
+    def show_lookup(self, text):
+        self.lookup_text.setText(text)
+        self.lookup_text.show()
+
+    def open_report(self, url, what):
+        if open_in_browser(url):
+            self.show_lookup(f"Opened VirusTotal's report for {what} in your browser.")
+        else:
+            self.show_lookup("Could not open a browser. Visit this address instead: " + url)
+
+    def lookup_link(self):
+        url = virustotal.link_url(self.link.text())
+        if url:
+            self.open_report(url, self.link.text().strip())
+        else:
+            self.show_lookup("Enter a web address starting with http:// or https://, or a domain such as example.com.")
+
+    def lookup_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a file to look up")
+        if path:
+            self.fingerprint_file(path)
+
+    def fingerprint_file(self, path):
+        self.lookup_file_button.setEnabled(False)
+        self.show_lookup("Calculating the file's fingerprint…")
+        # Large files take a while to read; keep the window responsive.
+        def work():
+            try:
+                result = (sha256(path), "")
+            except OSError as exc:
+                result = ("", exc.strerror or str(exc))
+            if not self.closing:
+                self.fingerprinted.emit(path, *result)
+        self.fingerprint_thread = Thread(target=work, daemon=True)
+        self.fingerprint_thread.start()
+
+    @Slot(str, str, str)
+    def file_fingerprinted(self, path, digest, error):
+        self.lookup_file_button.setEnabled(True)
+        if error:
+            self.show_lookup(f"Could not read {path}: {error}")
+        else:
+            self.open_report(virustotal.file_url(digest), path)
+            self.lookup_text.setText(self.lookup_text.text() + " If VirusTotal has no report, no one has submitted this file before; that alone does not mean it is safe.")
 
     def cancel_scan(self):
         self.scan_manager.cancel()

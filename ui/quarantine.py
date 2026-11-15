@@ -3,7 +3,8 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QCheckBox, QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QLineEdit, QMessageBox, QHeaderView, QFileDialog
 from core.quarantine import QuarantineManager
 from database.database import GuardianDatabase
-from ui.components import heading, label, button, write_csv
+from core import virustotal
+from ui.components import heading, label, button, open_in_browser, write_csv
 
 
 class QuarantinePage(QWidget):
@@ -49,9 +50,16 @@ class QuarantinePage(QWidget):
         layout.addLayout(status)
         self.feedback = label("")
         layout.addWidget(self.feedback)
-        actions = QHBoxLayout()
+        # Fingerprint tools get their own row so the page still fits a narrow window.
+        tools = QHBoxLayout()
         self.copy_button = button("Copy SHA-256", self.copy_hash)
-        actions.addWidget(self.copy_button)
+        tools.addWidget(self.copy_button)
+        self.lookup_button = button("Check on VirusTotal", self.lookup_hash)
+        self.lookup_button.setToolTip("Opens VirusTotal's report for this file's SHA-256 in your browser. Only the fingerprint is sent; the file stays in quarantine.")
+        tools.addWidget(self.lookup_button)
+        tools.addStretch()
+        layout.addLayout(tools)
+        actions = QHBoxLayout()
         actions.addStretch()
         self.restore_button = button("Restore selected", self.restore_file)
         self.delete_button = button("Delete permanently", self.delete_file, "danger")
@@ -94,6 +102,7 @@ class QuarantinePage(QWidget):
         self.delete_button.setEnabled(bool(count))
         self.restore_button.setText(f"Restore {count} selected" if count > 1 else "Restore selected")
         self.copy_button.setEnabled(count == 1 and bool(self.selected_hash()))
+        self.lookup_button.setEnabled(count == 1 and bool(virustotal.file_url(self.selected_hash())))
 
     def selected_ids(self):
         ids = []
@@ -117,6 +126,12 @@ class QuarantinePage(QWidget):
         if digest:
             QApplication.clipboard().setText(digest)
             self.feedback.setText("SHA-256 copied. Paste it into a service such as VirusTotal to look the file up without uploading it.")
+
+    def lookup_hash(self):
+        url = virustotal.file_url(self.selected_hash())
+        if url:
+            opened = open_in_browser(url)
+            self.feedback.setText("Opened VirusTotal's report in your browser. Only the SHA-256 was sent, not the file." if opened else "Could not open a browser. Copy the SHA-256 and search for it on virustotal.com.")
 
     def restore_file(self):
         self.perform_action("restore")

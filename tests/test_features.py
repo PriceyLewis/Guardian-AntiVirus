@@ -550,3 +550,48 @@ def test_scan_survives_file_names_that_are_not_utf8(isolated,monkeypatch):
     assert sorted(os.listdir(os.fsencode(folder)))==[b'good']
     db=GuardianDatabase();assert db.get_scan_count()==2;db.close()
 
+def test_virustotal_addresses():
+    from core import virustotal
+    digest='a'*64
+    assert virustotal.file_url(' '+digest.upper()+' ')=='https://www.virustotal.com/gui/file/'+digest
+    assert virustotal.file_url('abc') is None and virustotal.file_url(None) is None
+    assert virustotal.link_url('Example.com')=='https://www.virustotal.com/gui/domain/example.com'
+    assert virustotal.link_url(' https://example.com/a?b=c d'.replace(' d',''))=='https://www.virustotal.com/gui/search/https%253A%252F%252Fexample.com%252Fa%253Fb%253Dc'
+    for bad in ('','not a link','ftp://example.com/x','javascript:alert(1)','https://','file:///etc/passwd','http://exa mple.com'):
+        assert virustotal.link_url(bad) is None
+
+def test_quarantine_opens_virustotal_report_by_fingerprint(isolated,app,monkeypatch):
+    import hashlib
+    import ui.quarantine as page_module
+    from core.quarantine import QuarantineManager
+    file=isolated/'sample';file.write_text('fixture');QuarantineManager().quarantine(file,'Test')
+    opened=[];monkeypatch.setattr(page_module,'open_in_browser',lambda url:opened.append(url) or True)
+    page=page_module.QuarantinePage()
+    assert not page.lookup_button.isEnabled()
+    page.table.selectRow(0);assert page.lookup_button.isEnabled()
+    page.lookup_hash()
+    assert opened==['https://www.virustotal.com/gui/file/'+hashlib.sha256(b'fixture').hexdigest()]
+    assert 'Only the SHA-256 was sent' in page.feedback.text()
+    page.db.close()
+
+def test_dashboard_looks_up_files_and_links_without_uploading(isolated,app,monkeypatch):
+    import hashlib
+    import ui.dashboard as dashboard
+    opened=[];monkeypatch.setattr(dashboard,'open_in_browser',lambda url:opened.append(url) or True)
+    page=dashboard.DashboardPage()
+    page.link.setText('nonsense here');page.lookup_link()
+    assert not opened and 'Enter a web address' in page.lookup_text.text()
+    page.link.setText('https://example.com/x');page.lookup_link()
+    assert opened==['https://www.virustotal.com/gui/search/https%253A%252F%252Fexample.com%252Fx']
+    file=isolated/'download.bin';file.write_bytes(b'payload')
+    page.fingerprint_file(str(file));page.fingerprint_thread.join()
+    deadline=time.monotonic()+5
+    while len(opened)<2 and time.monotonic()<deadline:app.processEvents()
+    assert opened[1]=='https://www.virustotal.com/gui/file/'+hashlib.sha256(b'payload').hexdigest()
+    assert page.lookup_file_button.isEnabled()
+    page.fingerprint_file(str(isolated/'missing'));page.fingerprint_thread.join()
+    deadline=time.monotonic()+5
+    while 'Could not read' not in page.lookup_text.text() and time.monotonic()<deadline:app.processEvents()
+    assert 'Could not read' in page.lookup_text.text() and len(opened)==2
+    page.db.close()
+

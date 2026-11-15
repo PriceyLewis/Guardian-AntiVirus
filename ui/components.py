@@ -1,5 +1,7 @@
 import csv
 from pathlib import Path
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QPushButton
 
 
@@ -33,6 +35,10 @@ def button(text, callback, style="secondary"):
     control.setObjectName(style)
     control.clicked.connect(callback)
     return control
+
+
+def open_in_browser(url):
+    return QDesktopServices.openUrl(QUrl(url))
 
 
 def write_csv(path, header, rows):

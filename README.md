@@ -158,6 +158,7 @@ The implementation keeps scanning, monitoring, persistence, quarantine and notif
 - Overview shows the ClamAV signature version and age from `clamscan --version`, and warns when definitions are missing or more than 7 days old.
 - Each scan run is recorded with its duration, so the last scan survives restarts.
 - Excluded folders (Settings) are skipped by scans and monitoring.
+- **Second opinion from VirusTotal, without an API key:** *Check on VirusTotal* in Quarantine and the *Second opinion* card on the Overview page open VirusTotal's report for a file or link in your browser. Files are never uploaded; only their SHA-256 fingerprint is sent.
 - Quarantine records each file's SHA-256 so a detection can be looked up (for example on VirusTotal) without uploading it. Several records can be restored or deleted at once, and the list exports as CSV.
 - Settings can run FreshClam to update definitions and explains when the system FreshClam service or administrator rights are needed instead.
 - History filters by result and by period (24 hours, 7 days, 30 days).
