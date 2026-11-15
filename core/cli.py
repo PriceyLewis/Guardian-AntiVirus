@@ -40,6 +40,8 @@ def run_scan(args, out=sys.stdout, err=sys.stderr):
     except KeyboardInterrupt:
         worker.cancelled.set()
     action = "reported only" if report_only else f"{summary.get('quarantined', 0)} quarantined"
+    if summary.get("flagged") and not report_only:
+        action += f", {summary['flagged']} matched by YARA rules only and left in place"
     scanned = summary.get("scanned", 0)
     unchanged = f" ({summary['unchanged']} unchanged since last scan, not rechecked)" if summary.get("unchanged") else ""
     out.write(f"\nScanned {scanned} file{'' if scanned == 1 else 's'}: {summary.get('clean', 0)} clean{unchanged}, "
@@ -47,3 +49,13 @@ def run_scan(args, out=sys.stdout, err=sys.stderr):
     if summary.get("found"):
         return 1
     return 2 if summary.get("errors") else 0
+
+
+def update_threat_lists(out=sys.stdout):
+    """Download the hash list and YARA rules. Exit code 0 only if every list updated."""
+    from core import threatlists
+    outcome = threatlists.update()
+    for name, succeeded, message in outcome:
+        out.write(f"{name}: {'updated, ' if succeeded else 'FAILED: '}{message}\n")
+    return 0 if all(succeeded for _, succeeded, _ in outcome) else 2
+

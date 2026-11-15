@@ -16,6 +16,7 @@ dependencies = [
     "pyClamd==0.4.0",
     "watchdog>=6,<7",
 ]
+optional-dependencies = { yara = ["yara-x>=1,<2"] }
 classifiers = [
     "Operating System :: POSIX :: Linux",
     "Environment :: X11 Applications :: Qt",

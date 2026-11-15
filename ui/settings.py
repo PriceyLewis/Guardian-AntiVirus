@@ -3,7 +3,9 @@ from PySide6.QtCore import Qt, Signal, QSignalBlocker, QProcess, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit, QWidget, QFrame, QVBoxLayout, QHBoxLayout, QCheckBox, QMessageBox, QListWidget, QFileDialog, QComboBox, QGridLayout
 from config import load_config, DEFAULTS
-from core import onaccess, signatures
+from threading import Thread
+import core.paths as paths
+from core import engines, onaccess, signatures, threatlists
 from core.definitions import describe
 from core.paths import LOGS
 from database.database import GuardianDatabase
@@ -85,6 +87,8 @@ class SettingsPage(QWidget):
     changed = Signal(dict)
     monitored_changed = Signal()
     definitions_updated = Signal()
+    # Outcome of a background threat-list update: [(name, succeeded, message)].
+    threats_updated = Signal(list)
 
     def __init__(self):
         super().__init__()
@@ -102,6 +106,10 @@ class SettingsPage(QWidget):
                 ("realtime", "Monitor files in real time", "Scan created, changed and moved files. Turning this off stops new monitoring work; an engine call may still be finishing."),
                 ("archives", "Inspect archives", "Apply to subsequent scans. When off, Guardian uses clamscan with archive inspection disabled. Daemon limits still apply when on."),
                 ("skip_unchanged", "Skip files that have not changed", "Scans pass over files already found clean that have not been modified since. Everything is checked again whenever virus definitions update. Turn off to check every file on every scan.")]),
+            ("Extra detection engines", "A second opinion on files ClamAV finds clean. Both use free lists stored in Guardian's own folder; download them under Threat lists below.", [
+                ("hash_lookup", "Check files against known-malware fingerprints", "Compare each file's SHA-256 with lists of known malware. An exact match is quarantined like any other detection."),
+                ("yara_scan", "Scan with YARA-X rules", "Match community pattern rules that recognise malware families and variants. Needs the yara-x Python package."),
+                ("yara_quarantine", "Quarantine files matched only by YARA rules", "Pattern rules misfire more often than signatures. When off, such files are reported as detections in History and left where they are, so you can look them up first.")]),
             ("Schedule", "Scheduled scans run while Guardian is open, including when it is hidden in the tray.", [
                 ("scheduled_scan", "Run a daily quick scan", "Start a quick scan once a day."),
                 ("weekly_home_scan", "Run a weekly home scan", "Check your whole home folder once a week. This can take a long time on large folders."),
@@ -149,6 +157,20 @@ class SettingsPage(QWidget):
         actions.addStretch()
         group.addLayout(actions)
         layout.addWidget(frame)
+        frame, group = card("Threat lists", "Known-malware fingerprints from MalwareBazaar and the YARA Forge core rules, downloaded without an account. You can also put your own .txt hash lists and .yar rule files in the folder.")
+        self.threats_status = label("")
+        group.addWidget(self.threats_status)
+        actions = QHBoxLayout()
+        self.threats_button = button("Update threat lists", self.update_threat_lists)
+        actions.addWidget(self.threats_button)
+        actions.addWidget(button("Open folder", self.open_threat_folder))
+        actions.addStretch()
+        group.addLayout(actions)
+        self.threats_result = label("")
+        self.threats_result.hide()
+        group.addWidget(self.threats_result)
+        self.threats_updated.connect(self.threat_lists_updated)
+        layout.addWidget(frame)
         frame, group = card("Extra signature sources (advanced)", "Community-maintained signatures catch threats the official ClamAV database misses, at the cost of more false positives. They need administrator setup, so Guardian checks their status and gives you the exact steps.")
         self.signatures_status = label("")
         group.addWidget(self.signatures_status)
@@ -182,6 +204,7 @@ class SettingsPage(QWidget):
         self.load_settings()
         self.check_onaccess()
         self.check_signatures()
+        self.check_threat_lists()
         for toggle in self.controls.values():
             toggle.toggled.connect(self.save_settings)
         for choice in self.choices.values():
@@ -248,6 +271,35 @@ class SettingsPage(QWidget):
     def show_onaccess_steps(self):
         steps = onaccess.setup_steps(self.monitored.folders(), onaccess.status())
         self.steps_dialog = steps_dialog(self, "Set up on-access blocking", steps)
+
+    def check_threat_lists(self):
+        text, attention = engines.describe(engines.status())
+        self.threats_status.setText(text)
+        self.threats_status.setObjectName("warning" if attention else "muted")
+        self.threats_status.style().unpolish(self.threats_status)
+        self.threats_status.style().polish(self.threats_status)
+
+    def update_threat_lists(self):
+        self.threats_button.setEnabled(False)
+        self.threats_result.setText("Downloading… this can take a minute the first time.")
+        self.threats_result.show()
+        # Downloads must not freeze the window.
+        self.threats_thread = Thread(target=lambda: self.threats_updated.emit(threatlists.update()), name="guardian-threat-lists", daemon=True)
+        self.threats_thread.start()
+
+    def threat_lists_updated(self, outcome):
+        self.threats_button.setEnabled(True)
+        self.threats_result.setText("\n".join(f"{name}: {'updated, ' if succeeded else 'could not update: '}{message}" for name, succeeded, message in outcome))
+        self.threats_result.setObjectName("muted" if all(succeeded for _, succeeded, _ in outcome) else "warning")
+        self.threats_result.style().unpolish(self.threats_result)
+        self.threats_result.style().polish(self.threats_result)
+        self.check_threat_lists()
+
+    def open_threat_folder(self):
+        for folder in (engines.hash_folder(), engines.rule_folder()):
+            folder.mkdir(parents=True, exist_ok=True)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.THREATS))):
+            QMessageBox.information(self, "Threat lists", f"Hash lists (.txt) go in {engines.hash_folder()} and YARA rules (.yar) in {engines.rule_folder()}.")
 
     def check_signatures(self):
         text, attention = signatures.describe(signatures.status())

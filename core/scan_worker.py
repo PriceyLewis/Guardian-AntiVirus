@@ -7,6 +7,7 @@ from PySide6.QtCore import QObject, Signal
 import core.paths as paths
 from core.paths import QUARANTINE, display, is_excluded, is_guardian_storage
 from core.scanner import GuardianScanner
+from core.engines import SecondOpinion
 from core.quarantine import QuarantineManager, sha256
 from core.notifier import GuardianNotifier
 from core.log import log
@@ -39,7 +40,7 @@ class ScanWorker(QObject):
     def run(self):
         db = None
         scanned = 0
-        totals = {"clean": 0, "found": 0, "errors": 0, "quarantined": 0, "unchanged": 0}
+        totals = {"clean": 0, "found": 0, "errors": 0, "quarantined": 0, "unchanged": 0, "flagged": 0}
         detections = []
         began = time.monotonic()
         def report_error(message):
@@ -95,7 +96,11 @@ class ScanWorker(QObject):
             # Files the same engine and signatures already found clean, and unchanged since, are not rescanned.
             # A scan that rechecks everything still records what it found clean, for later scans.
             skip = load_config()["skip_unchanged"] if self.skip_unchanged is None else self.skip_unchanged
+            extra = SecondOpinion()
+            yara_quarantine = load_config()["yara_quarantine"]
             key = getattr(scanner, "engine_key", lambda: None)()
+            if key:
+                key += "|" + extra.key()
             if key:
                 db.cache_engine(key)
             signatures = {}
@@ -122,14 +127,14 @@ class ScanWorker(QObject):
                 more = f"  (+{len(paths) - 1:,} more in this batch)" if len(paths) > 1 else ""
                 self.current_file.emit(display(paths[0]) + more)
             committed = time.monotonic()
-            for file, result in scanner.scan_files(queue, started=started):
+            for file, result in extra.review(scanner.scan_files(queue, started=started), expected=len(queue)):
                 status, virus = result["status"], result.get("virus")
                 # File names are bytes on disk and need not be valid text.
                 shown = display(file)
                 digest = None
                 if status == "found":
                     try:
-                        digest = sha256(file)
+                        digest = result.get("sha256") or sha256(file)
                         detections.append(digest)
                     except OSError:
                         pass
@@ -151,7 +156,10 @@ class ScanWorker(QObject):
                     report_error(f"{shown}: {virus}")
                 if status == "found":
                     log.warning("Detection %s in %s", virus, shown)
-                if status == "found" and self.quarantine_found:
+                # Pattern rules misfire more than signatures, so their matches are isolated only on request.
+                if status == "found" and result.get("engine") == "yara" and not yara_quarantine:
+                    totals["flagged"] += 1
+                elif status == "found" and self.quarantine_found:
                     try:
                         quarantine.quarantine(file, virus)
                         totals["quarantined"] += 1

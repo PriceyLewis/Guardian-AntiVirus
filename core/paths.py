@@ -16,6 +16,8 @@ LEGACY_DATA = ROOT
 QUARANTINE = DATA / "quarantine"
 DATABASE_DIR = DATA / "database"
 LOGS = DATA / "logs"
+# Hash lists and YARA rules for the second-opinion engines; rule files describe malware and would match themselves.
+THREATS = DATA / "threat-lists"
 
 
 def is_guardian_storage(path, quarantine=QUARANTINE):
@@ -24,7 +26,7 @@ def is_guardian_storage(path, quarantine=QUARANTINE):
     Scanning these would re-trigger monitoring on every history write.
     """
     path = Path(path).resolve()
-    if any(path.is_relative_to(Path(folder).resolve()) for folder in (quarantine, DATABASE_DIR, LOGS)):
+    if any(path.is_relative_to(Path(folder).resolve()) for folder in (quarantine, DATABASE_DIR, LOGS, THREATS)):
         return True
     return path.parent == DATA.resolve() and (path.name == "config.json" or path.name.startswith((".config-", "guardian.lock")))
 

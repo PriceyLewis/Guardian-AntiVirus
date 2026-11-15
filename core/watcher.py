@@ -4,6 +4,7 @@ from threading import Event, Lock, Thread
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from core.scanner import GuardianScanner
+from core.engines import SecondOpinion
 from core import virustotal
 from core.quarantine import QuarantineManager, sha256
 from core.notifier import GuardianNotifier
@@ -21,6 +22,7 @@ SETTLE_SECONDS = 1.0
 class GuardianWatcher(FileSystemEventHandler):
     def __init__(self):
         self.scanner = None
+        self.extra = None
         self.stopping = Event()
         self.quarantine = QuarantineManager()
         self.last_error = None
@@ -113,12 +115,17 @@ class GuardianWatcher(FileSystemEventHandler):
             if self.scanner is None:
                 self.scanner = GuardianScanner()
             result = self.scanner.scan_file(file)
+            if result["status"] == "clean":
+                # Reloaded when the user changes settings or updates the threat lists.
+                if self.extra is None or self.extra.expired():
+                    self.extra = SecondOpinion()
+                result = self.extra.check(file) or result
             if self.stopping.is_set():
                 return
             digest = None
             if result["status"] == "found":
                 try:
-                    digest = sha256(file)
+                    digest = result.get("sha256") or sha256(file)
                 except OSError:
                     pass
             db.add_scan(display(file.absolute()), result["status"], result.get("virus"), sha256=digest)
@@ -129,8 +136,11 @@ class GuardianWatcher(FileSystemEventHandler):
                 if len(self.scanned) > 10000:
                     self.scanned.clear()
                 self.scanned[file] = signature
-            if result["status"] == "found":
-                log.warning("Real-time detection %s in %s", result.get("virus"), file)
+            if result["status"] == "found" and result.get("engine") == "yara" and not load_config()["yara_quarantine"]:
+                log.warning("Real-time YARA match %s in %s (not quarantined)", result.get("virus"), display(file))
+                GuardianNotifier.notify("Guardian", f"Suspicious file: {display(file.name)} matches {result.get('virus')}. It was not quarantined; see History.")
+            elif result["status"] == "found":
+                log.warning("Real-time detection %s in %s", result.get("virus"), display(file))
                 self.quarantine.quarantine(file, result.get("virus"))
                 GuardianNotifier.notify("Guardian", f"Threat quarantined: {display(file.name)}")
             elif result["status"] == "clean" and arrived:

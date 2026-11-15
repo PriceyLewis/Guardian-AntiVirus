@@ -275,7 +275,8 @@ class DashboardPage(QWidget):
         unchanged = f" ({summary['unchanged']:,} unchanged, not rechecked)" if summary.get("unchanged") else ""
         self.detections = list(summary.get("detections", []))
         self.detections_button.setVisible(bool(self.detections))
-        self.result_text.setText(f"Clean: {summary['clean']}{unchanged}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}   •   Errors: {summary['errors']}{took}")
+        flagged = f" ({summary['flagged']} matched by YARA rules only, left in place)" if summary.get("flagged") else ""
+        self.result_text.setText(f"Clean: {summary['clean']}{unchanged}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}{flagged}   •   Errors: {summary['errors']}{took}")
         self.error_text.setText("\n".join(self.scan_errors))
         self.refresh_dashboard()
         # Tray-started and scheduled scans may finish while the window is hidden.
