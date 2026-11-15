@@ -38,3 +38,10 @@ def is_excluded(path, exclusions):
 def display(path):
     """Text form of a path that is safe to store and show; bytes that are not UTF-8 become \ufffd."""
     return str(path).encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
+def downloads_dir():
+    """The desktop's Downloads folder, honouring a relocated XDG user directory."""
+    from PySide6.QtCore import QStandardPaths
+    return Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation) or Path.home() / "Downloads")
+

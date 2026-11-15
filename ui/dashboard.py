@@ -1,6 +1,6 @@
 from datetime import datetime
 from threading import Thread
-from PySide6.QtCore import Signal, Slot
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QProgressBar, QFileDialog, QLineEdit
 from core.scan_manager import ScanManager
 from core.notifier import GuardianNotifier
@@ -8,9 +8,9 @@ from core.scanner import daemon_socket, describe_engine
 from config import load_config
 from database.database import GuardianDatabase
 from ui.widgets import StatCard, ProtectionCard, RecentActivityCard
-from core import virustotal
+from core import daemon, virustotal
 from core.quarantine import sha256
-from ui.components import heading, card, label, button, open_in_browser
+from ui.components import heading, card, label, button, open_in_browser, steps_dialog
 
 
 class DashboardPage(QWidget):
@@ -31,6 +31,9 @@ class DashboardPage(QWidget):
         layout.setSpacing(18)
         heading(layout, "Overview", "Your scans, protection activity and quarantined files in one place.")
         self.protection = ProtectionCard()
+        self.daemon_button = button("Set up faster scanning…", self.show_daemon_steps)
+        self.daemon_button.hide()
+        self.protection.layout().addWidget(self.daemon_button, 0, Qt.AlignmentFlag.AlignLeft)
         layout.addWidget(self.protection)
         stats = QHBoxLayout()
         self.files_card = StatCard("Files processed", 0)
@@ -70,6 +73,11 @@ class DashboardPage(QWidget):
         self.result_text = label("")
         self.result_text.hide()
         group.addWidget(self.result_text)
+        self.detections = []
+        self.detections_button = button("Check detections on VirusTotal", self.lookup_detections)
+        self.detections_button.setToolTip("Opens VirusTotal's report for each detected file in your browser. Only SHA-256 fingerprints are sent.")
+        self.detections_button.hide()
+        group.addWidget(self.detections_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.error_text = label("")
         self.error_text.setObjectName("warning")
         self.error_text.hide()
@@ -102,7 +110,9 @@ class DashboardPage(QWidget):
         self.quarantine_card.set_value(self.db.get_quarantine_count())
         self.activity.update_activity(self.db.recent_scans(5))
         # A local socket answers at once; the short timeout covers a daemon that is still loading.
-        self.protection.engine.setText(describe_engine(bool(daemon_socket(timeout=1)), load_config()["archives"]))
+        connected = bool(daemon_socket(timeout=1))
+        self.protection.engine.setText(describe_engine(connected, load_config()["archives"]))
+        self.daemon_button.setVisible(not connected)
         run = self.db.last_scan_run()
         if run:
             timestamp, name, scanned, found, errors, cancelled, duration = run
@@ -124,6 +134,7 @@ class DashboardPage(QWidget):
         self.current_file.setText("Collecting files…")
         self.result_text.clear()
         self.result_text.hide()
+        self.detections_button.hide()
         self.error_text.hide()
         self.error_text.clear()
         scan_function(progress_callback=self.update_progress, maximum_callback=self.set_maximum,
@@ -153,6 +164,16 @@ class DashboardPage(QWidget):
     def scan_paths(self, paths):
         """Scan any mix of files and folders, e.g. dropped onto the window."""
         self.start_scan(lambda **kwargs: self.scan_manager.scan_paths(paths, **kwargs), "Custom scan")
+
+    def show_daemon_steps(self):
+        self.steps_dialog = steps_dialog(self, "Set up the ClamAV daemon", daemon.setup_steps(daemon.family()))
+
+    def lookup_detections(self):
+        # A browser tab each; more than a few at once is unhelpful.
+        urls = [virustotal.file_url(digest) for digest in self.detections[:MAX_REPORTS]]
+        opened = sum(1 for url in urls if url and open_in_browser(url))
+        more = f" The other {len(self.detections) - MAX_REPORTS} can be checked from History." if len(self.detections) > MAX_REPORTS else ""
+        self.current_file.setText((f"Opened {opened} VirusTotal report{'s' if opened != 1 else ''} in your browser." if opened else "Could not open a browser. Use Check on VirusTotal in History or Quarantine.") + more)
 
     def show_lookup(self, text):
         self.lookup_text.setText(text)
@@ -243,13 +264,20 @@ class DashboardPage(QWidget):
         self.result_text.show()
         self.error_text.setVisible(bool(self.scan_errors))
         took = f"   •   Took {format_duration(summary['duration'])}" if "duration" in summary else ""
-        self.result_text.setText(f"Clean: {summary['clean']}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}   •   Errors: {summary['errors']}{took}")
+        unchanged = f" ({summary['unchanged']:,} unchanged, not rechecked)" if summary.get("unchanged") else ""
+        self.detections = list(summary.get("detections", []))
+        self.detections_button.setVisible(bool(self.detections))
+        self.result_text.setText(f"Clean: {summary['clean']}{unchanged}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}   •   Errors: {summary['errors']}{took}")
         self.error_text.setText("\n".join(self.scan_errors))
         self.refresh_dashboard()
         # Tray-started and scheduled scans may finish while the window is hidden.
         if not self.window().isVisible():
             found = f"{summary['found']} threat{'s' if summary['found'] != 1 else ''} found" if summary["found"] else "no threats found"
             GuardianNotifier.notify("Guardian", f"{self.scan_name}: {state.lower()}, {scanned:,} file{'s' if scanned != 1 else ''} checked, {found}.")
+
+
+# Detections opened as VirusTotal reports by one click.
+MAX_REPORTS = 3
 
 
 def format_duration(seconds):

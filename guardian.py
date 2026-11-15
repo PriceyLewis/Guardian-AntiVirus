@@ -13,7 +13,7 @@ from ui.theme import apply_theme, follow_system
 
 
 USAGE = """usage: guardian [--minimized]
-       guardian --scan [--report-only] PATH...
+       guardian --scan [--report-only] [--full] PATH...
        guardian --install-menu-entry | --remove-menu-entry"""
 
 

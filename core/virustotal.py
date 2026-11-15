@@ -4,6 +4,7 @@ No API key is involved and no file is ever uploaded: a file is identified by
 its SHA-256 fingerprint only, and a link by its address.
 """
 import re
+import subprocess
 from urllib.parse import quote, urlsplit
 
 SITE = "https://www.virustotal.com/gui/"
@@ -30,3 +31,13 @@ def link_url(text):
         return None
     # The site's search page expects the address percent-encoded twice.
     return SITE + "search/" + quote(quote(text, safe=""), safe="")
+
+
+def open_externally(url):
+    """Open a report without touching the GUI, for use from background threads."""
+    try:
+        subprocess.Popen(["xdg-open", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except OSError:
+        return False
+

@@ -2,7 +2,7 @@ import csv
 from pathlib import Path
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QPushButton
+from PySide6.QtWidgets import QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QVBoxLayout, QPushButton
 
 
 def label(text, name="muted"):
@@ -35,6 +35,24 @@ def button(text, callback, style="secondary"):
     control.setObjectName(style)
     control.clicked.connect(callback)
     return control
+
+
+def steps_dialog(parent, title, steps):
+    """Read-only instructions with a copy button; the caller keeps the returned dialog alive."""
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(title)
+    dialog.resize(640, 460)
+    box = QVBoxLayout(dialog)
+    text = QPlainTextEdit(steps)
+    text.setReadOnly(True)
+    box.addWidget(text)
+    row = QHBoxLayout()
+    row.addStretch()
+    row.addWidget(button("Copy steps", lambda: QApplication.clipboard().setText(steps)))
+    row.addWidget(button("Close", dialog.accept))
+    box.addLayout(row)
+    dialog.open()
+    return dialog
 
 
 def open_in_browser(url):

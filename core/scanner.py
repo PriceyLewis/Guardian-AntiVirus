@@ -1,3 +1,4 @@
+import hashlib
 import os
 import queue
 import socket
@@ -11,6 +12,8 @@ from config import load_config
 
 # Debian/Ubuntu, Arch and Fedora/RHEL default clamd socket locations.
 CLAMD_SOCKETS = ("/var/run/clamav/clamd.ctl", "/run/clamav/clamd.ctl", "/run/clamd.scan/clamd.sock")
+# Where distributions keep signature databases; their contents are part of the engine's identity.
+DATABASE_DIRS = ("/var/lib/clamav",)
 DAEMON_TIMEOUT = 120
 # clamd scans on several threads (MaxThreads); keep a few of them busy.
 DAEMON_WORKERS = min(8, max(2, os.cpu_count() or 2))
@@ -55,6 +58,29 @@ class GuardianScanner:
         self.socket = daemon_socket()
         if self.socket:
             self.clamd = pyclamd.ClamdUnixSocket(filename=self.socket, timeout=DAEMON_TIMEOUT)
+
+    def engine_key(self):
+        """Text that changes whenever the engine, its signatures or the archive policy do.
+
+        Results remembered under one key are not trusted under another. None when unknown.
+        """
+        archives = load_config()["archives"]
+        try:
+            version = self.clamd.version().strip() if self.clamd and archives else ""
+            # Daemons can be configured to refuse the version command; clamscan reads the same databases.
+            if not version.startswith("ClamAV"):
+                version = subprocess.run(["clamscan", "--version"], capture_output=True, text=True, timeout=60).stdout.strip()
+            if not version.startswith("ClamAV"):
+                return None
+            # Locally added signature files do not change the reported version.
+            databases = []
+            for folder in DATABASE_DIRS:
+                if os.path.isdir(folder):
+                    with os.scandir(folder) as entries:
+                        databases += sorted((e.name, e.stat().st_size, e.stat().st_mtime_ns) for e in entries if e.is_file())
+        except Exception:
+            return None
+        return f"{version}|archives={archives}|{hashlib.sha256(repr(databases).encode()).hexdigest()[:16]}"
 
     def scan_file(self, filepath):
         filepath = Path(filepath).absolute()
@@ -142,8 +168,8 @@ class GuardianScanner:
         """Yield (path, result) pairs as they finish, which may not be in input order.
 
         The daemon is asked about several files at once; whatever it cannot answer
-        shares clamscan processes. started, if given, receives the list of paths
-        before each engine call.
+        shares clamscan processes. started, if given, receives the paths about to be
+        scanned: every path before a clamscan run, then one path at a time.
         """
         archives = load_config()["archives"]
         paths = (Path(p).absolute() for p in filepaths)
@@ -231,7 +257,7 @@ class GuardianScanner:
                     for name in share:
                         yield pending[name], {"status": "error", "virus": str(exc)}
                     continue
-                runs.append({"process": process, "listing": listing, "errors": errors, "left": set(share)})
+                runs.append({"process": process, "listing": listing, "errors": errors, "left": set(share), "share": share, "done": 0})
                 Thread(target=self._read_lines, args=(len(runs) - 1, process, lines), daemon=True).start()
             active = len(runs)
             while active:
@@ -250,6 +276,10 @@ class GuardianScanner:
                     if name not in run["left"]:
                         continue
                     run["left"].discard(name)
+                    # clamscan works through its list in order, so the next entry is being scanned now.
+                    run["done"] += 1
+                    if started and run["done"] < len(run["share"]):
+                        started([pending[run["share"][run["done"]]]])
                     if detail in ("OK", "Empty file"):
                         yield pending[name], {"status": "clean", "virus": None}
                     elif detail.endswith(" FOUND"):

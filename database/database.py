@@ -53,6 +53,21 @@ class GuardianDatabase:
         )
         """)
 
+        # Files found clean by the engine version stored under meta 'engine'.
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS clean_cache(
+            path TEXT PRIMARY KEY,
+            size INTEGER,
+            mtime INTEGER,
+            ctime INTEGER,
+            inode INTEGER
+        )
+        """)
+        cursor.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
+
+        if "sha256" not in [row[1] for row in cursor.execute("PRAGMA table_info(scans)")]:
+            cursor.execute("ALTER TABLE scans ADD COLUMN sha256 TEXT")
+
         # Older installs lack the fingerprint and permission columns.
         columns = [row[1] for row in cursor.execute("PRAGMA table_info(quarantine)")]
         for column, kind in (("sha256", "TEXT"), ("mode", "INTEGER")):
@@ -72,26 +87,61 @@ class GuardianDatabase:
 
         self.conn.commit()
 
-    def add_scan(self, filepath, status, virus=None, commit=True):
+    def add_scan(self, filepath, status, virus=None, commit=True, sha256=None):
         """Record one result. Bulk scans pass commit=False and call commit() themselves,
         because committing every row forces a disk sync per file."""
         cursor = self.conn.cursor()
 
         cursor.execute("""
         INSERT INTO scans
-        (timestamp, filepath, status, virus)
-        VALUES (?, ?, ?, ?)
+        (timestamp, filepath, status, virus, sha256)
+        VALUES (?, ?, ?, ?, ?)
         """, (
             datetime.now().isoformat(timespec="seconds"),
             filepath,
             status,
-            virus
+            virus,
+            sha256
         ))
 
         if commit:
             self.conn.commit()
 
     def commit(self):
+        self.conn.commit()
+
+    def detection_hash(self, filepath):
+        """SHA-256 of the most recent detection at a path, from history or quarantine."""
+        for query in ("SELECT sha256 FROM scans WHERE filepath=? AND status='found' AND sha256 IS NOT NULL ORDER BY id DESC LIMIT 1",
+                      "SELECT sha256 FROM quarantine WHERE original_path=? AND sha256 IS NOT NULL ORDER BY id DESC LIMIT 1"):
+            row = self.conn.execute(query, (filepath,)).fetchone()
+            if row:
+                return row[0]
+        return None
+
+    def cache_engine(self, key):
+        """Start using the clean-file cache for an engine version, emptying it if that changed.
+
+        New signatures may recognise a file that older ones passed.
+        """
+        row = self.conn.execute("SELECT value FROM meta WHERE key='engine'").fetchone()
+        if not row or row[0] != key:
+            self.conn.execute("DELETE FROM clean_cache")
+            self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('engine', ?)", (key,))
+            self.conn.commit()
+
+    def cached_clean(self, path):
+        """(size, mtime, ctime, inode) the file had when it was last found clean, or None."""
+        return self.conn.execute("SELECT size, mtime, ctime, inode FROM clean_cache WHERE path=?", (path,)).fetchone()
+
+    def remember_clean(self, path, signature):
+        self.conn.execute("INSERT OR REPLACE INTO clean_cache(path, size, mtime, ctime, inode) VALUES (?, ?, ?, ?, ?)", (path, *signature))
+
+    def forget_clean(self, path):
+        self.conn.execute("DELETE FROM clean_cache WHERE path=?", (path,))
+
+    def clear_clean_cache(self):
+        self.conn.execute("DELETE FROM clean_cache")
         self.conn.commit()
 
     def add_quarantine(self, original, quarantine, virus, sha256=None, mode=None):

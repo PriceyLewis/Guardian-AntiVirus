@@ -6,9 +6,10 @@ from PySide6.QtCore import QObject, Signal
 import core.paths as paths
 from core.paths import QUARANTINE, display, is_excluded, is_guardian_storage
 from core.scanner import GuardianScanner
-from core.quarantine import QuarantineManager
+from core.quarantine import QuarantineManager, sha256
 from core.notifier import GuardianNotifier
 from core.log import log
+from config import load_config
 from database.database import GuardianDatabase
 
 # Seconds of scan history held in one database transaction.
@@ -24,18 +25,21 @@ class ScanWorker(QObject):
     summary = Signal(dict)
     result = Signal(str, str, str)
 
-    def __init__(self, folders, name="Scan", quarantine=True):
+    def __init__(self, folders, name="Scan", quarantine=True, skip_unchanged=None):
         super().__init__()
         # Despite the name, entries may also be individual files.
         self.folders = folders
         self.name = name
         self.quarantine_found = quarantine
+        # None follows the user's setting; False forces every file to be checked.
+        self.skip_unchanged = skip_unchanged
         self.cancelled = Event()
 
     def run(self):
         db = None
         scanned = 0
-        totals = {"clean": 0, "found": 0, "errors": 0, "quarantined": 0}
+        totals = {"clean": 0, "found": 0, "errors": 0, "quarantined": 0, "unchanged": 0}
+        detections = []
         began = time.monotonic()
         def report_error(message):
             totals["errors"] += 1
@@ -82,15 +86,53 @@ class ScanWorker(QObject):
                         except OSError as exc:
                             report_error(str(exc))
             self.maximum.emit(len(files))
+            # Files the same engine and signatures already found clean, and unchanged since, are not rescanned.
+            skip = load_config()["skip_unchanged"] if self.skip_unchanged is None else self.skip_unchanged
+            key = getattr(scanner, "engine_key", lambda: None)() if skip else None
+            if key:
+                db.cache_engine(key)
+            signatures = {}
+            queue = []
+            for file in sorted(files):
+                if key and display(file) == str(file):
+                    if self.cancelled.is_set():
+                        return
+                    try:
+                        stat = file.lstat()
+                        # ctime cannot be set back by a program that restores a file's mtime.
+                        signatures[file] = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino)
+                    except OSError:
+                        pass
+                    if file in signatures and db.cached_clean(str(file)) == signatures[file]:
+                        totals["clean"] += 1
+                        totals["unchanged"] += 1
+                        scanned += 1
+                        self.result.emit(str(file), "clean", "")
+                        continue
+                queue.append(file)
+            self.progress.emit(scanned)
             def started(paths):
                 more = f"  (+{len(paths) - 1:,} more in this batch)" if len(paths) > 1 else ""
                 self.current_file.emit(display(paths[0]) + more)
             committed = time.monotonic()
-            for file, result in scanner.scan_files(sorted(files), started=started):
+            for file, result in scanner.scan_files(queue, started=started):
                 status, virus = result["status"], result.get("virus")
                 # File names are bytes on disk and need not be valid text.
                 shown = display(file)
-                db.add_scan(shown, status, virus, commit=False)
+                digest = None
+                if status == "found":
+                    try:
+                        digest = sha256(file)
+                        detections.append(digest)
+                    except OSError:
+                        pass
+                db.add_scan(shown, status, virus, commit=False, sha256=digest)
+                if key and shown == str(file):
+                    # The signature predates the scan, so a file changed meanwhile is checked again next time.
+                    if status == "clean" and file in signatures:
+                        db.remember_clean(shown, signatures[file])
+                    else:
+                        db.forget_clean(shown)
                 # An open write transaction would lock out the quarantine's own connection.
                 if status == "found" or time.monotonic() - committed >= COMMIT_INTERVAL:
                     db.commit()
@@ -127,5 +169,5 @@ class ScanWorker(QObject):
                 db.close()
             log.info("%s %s: %d scanned, %d found, %d quarantined, %d errors in %.1fs", self.name,
                      "cancelled" if cancelled else "finished", scanned, totals["found"], totals["quarantined"], totals["errors"], duration)
-            self.summary.emit(dict(totals, scanned=scanned, cancelled=cancelled, duration=duration))
+            self.summary.emit(dict(totals, scanned=scanned, cancelled=cancelled, duration=duration, detections=detections))
             self.finished.emit(scanned)
