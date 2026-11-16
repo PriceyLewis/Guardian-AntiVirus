@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QComboBox, QFileDialog, QMessageBox, QHeaderView
 from database.database import GuardianDatabase
-from ui.components import heading, label, button, write_csv
+from core import virustotal
+from ui.components import heading, label, button, open_in_browser, write_csv
 
 
 class HistoryPage(QWidget):
@@ -47,6 +48,10 @@ class HistoryPage(QWidget):
         footer = QHBoxLayout()
         self.count = label("")
         footer.addWidget(self.count, 1)
+        self.lookup_button = button("Check on VirusTotal", self.lookup_detection)
+        self.lookup_button.setToolTip("Opens VirusTotal's report for the selected detection in your browser. Only the file's SHA-256 fingerprint is sent.")
+        self.lookup_button.setEnabled(False)
+        footer.addWidget(self.lookup_button)
         footer.addWidget(button("Refresh", self.refresh))
         self.clear_button = button("Clear history", self.clear_history, "danger")
         footer.addWidget(self.clear_button)
@@ -54,6 +59,7 @@ class HistoryPage(QWidget):
         self.search.textChanged.connect(self.filter_table)
         self.filter.currentIndexChanged.connect(self.filter_table)
         self.period.currentIndexChanged.connect(self.filter_table)
+        self.table.itemSelectionChanged.connect(self.update_lookup)
         self.refresh()
 
     def refresh(self):
@@ -86,6 +92,23 @@ class HistoryPage(QWidget):
         self.count.setText(f"Showing {len(rows)} of {len(self.rows)} recent results")
         self.export_button.setEnabled(bool(rows))
         self.clear_button.setEnabled(bool(self.rows))
+        self.update_lookup()
+
+    def selected_detection_hash(self):
+        """Fingerprint of the selected row if it is a detection whose SHA-256 is known."""
+        rows = self.table.selectionModel().selectedRows()
+        if len(rows) != 1 or rows[0].row() >= len(self.filtered_rows):
+            return None
+        record = self.filtered_rows[rows[0].row()]
+        return self.db.detection_hash(record[1]) if record[2] == "found" else None
+
+    def update_lookup(self):
+        self.lookup_button.setEnabled(bool(virustotal.file_url(self.selected_detection_hash())))
+
+    def lookup_detection(self):
+        url = virustotal.file_url(self.selected_detection_hash())
+        if url:
+            self.count.setText("Opened VirusTotal's report in your browser. Only the SHA-256 was sent, not the file." if open_in_browser(url) else "Could not open a browser.")
 
     def clear_history(self):
         if QMessageBox.question(self, "Clear history", "Delete all scan history? Quarantined files are not affected.", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
