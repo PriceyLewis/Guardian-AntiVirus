@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QTableWidget, QTableWidgetItem, QComboBox, QFileDialog, QMessageBox, QHeaderView
+from pathlib import Path
+from core.quarantine import QuarantineManager
 from database.database import GuardianDatabase
 from core import virustotal
 from ui.components import heading, label, button, open_in_browser, write_csv
@@ -14,13 +16,13 @@ class HistoryPage(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(18)
-        heading(layout, "Scan history", "Review the latest 500 file results. Errors mean a file was not successfully checked.")
+        heading(layout, "Scan history", "Review the latest 500 file results. Errors mean a file was not successfully checked. Suspicious files matched a YARA rule only and were left in place: look them up, then quarantine or ignore them.")
         toolbar = QHBoxLayout()
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search file paths or threat names…")
         self.search.setClearButtonEnabled(True)
         self.filter = QComboBox()
-        for text, value in [("All results", ""), ("Clean", "clean"), ("Detections", "found"), ("Errors", "error")]:
+        for text, value in [("All results", ""), ("Clean", "clean"), ("Detections", "found"), ("Suspicious", "suspicious"), ("Errors", "error")]:
             self.filter.addItem(text, value)
         self.period = QComboBox()
         for text, days in [("All time", 0), ("Last 24 hours", 1), ("Last 7 days", 7), ("Last 30 days", 30)]:
@@ -45,13 +47,22 @@ class HistoryPage(QWidget):
         layout.addWidget(self.table, 1)
         self.empty = label("No scan results yet. Start a scan from Overview.")
         layout.addWidget(self.empty)
+        # Actions on the selected result get their own row so the page still fits a narrow window.
+        actions = QHBoxLayout()
+        self.lookup_button = button("Check on VirusTotal", self.lookup_detection)
+        self.lookup_button.setToolTip("Opens VirusTotal's report for the selected detection in your browser. Only the file's SHA-256 fingerprint is sent.")
+        self.quarantine_button = button("Quarantine now", self.quarantine_suspicious)
+        self.quarantine_button.setToolTip("Move the selected suspicious file into quarantine.")
+        self.ignore_button = button("Ignore this file", self.ignore_suspicious)
+        self.ignore_button.setToolTip("Stop reporting this file while its contents stay the same. Undo this under Settings, Threat lists.")
+        for control in (self.lookup_button, self.quarantine_button, self.ignore_button):
+            control.setEnabled(False)
+            actions.addWidget(control)
+        actions.addStretch()
+        layout.addLayout(actions)
         footer = QHBoxLayout()
         self.count = label("")
         footer.addWidget(self.count, 1)
-        self.lookup_button = button("Check on VirusTotal", self.lookup_detection)
-        self.lookup_button.setToolTip("Opens VirusTotal's report for the selected detection in your browser. Only the file's SHA-256 fingerprint is sent.")
-        self.lookup_button.setEnabled(False)
-        footer.addWidget(self.lookup_button)
         footer.addWidget(button("Refresh", self.refresh))
         self.clear_button = button("Clear history", self.clear_history, "danger")
         footer.addWidget(self.clear_button)
@@ -83,7 +94,7 @@ class HistoryPage(QWidget):
                 if col == 0:
                     value = str(value).replace("T", " ")
                 if col == 2:
-                    value = {"found": "Detection", "clean": "Clean", "error": "Error"}.get(value, value)
+                    value = {"found": "Detection", "suspicious": "Suspicious", "ignored": "Ignored", "clean": "Clean", "error": "Error"}.get(value, value)
                 item = QTableWidgetItem(str(value or "—"))
                 item.setToolTip(str(value or ""))
                 self.table.setItem(row, col, item)
@@ -94,16 +105,45 @@ class HistoryPage(QWidget):
         self.clear_button.setEnabled(bool(self.rows))
         self.update_lookup()
 
-    def selected_detection_hash(self):
-        """Fingerprint of the selected row if it is a detection whose SHA-256 is known."""
+    def selected_record(self):
         rows = self.table.selectionModel().selectedRows()
         if len(rows) != 1 or rows[0].row() >= len(self.filtered_rows):
             return None
-        record = self.filtered_rows[rows[0].row()]
-        return self.db.detection_hash(record[1]) if record[2] == "found" else None
+        return self.filtered_rows[rows[0].row()]
+
+    def selected_detection_hash(self):
+        """Fingerprint of the selected row if it is a detection whose SHA-256 is known."""
+        record = self.selected_record()
+        return self.db.detection_hash(record[1]) if record and record[2] in ("found", "suspicious", "ignored") else None
 
     def update_lookup(self):
+        record = self.selected_record()
+        suspicious = bool(record) and record[2] == "suspicious"
         self.lookup_button.setEnabled(bool(virustotal.file_url(self.selected_detection_hash())))
+        self.quarantine_button.setEnabled(suspicious)
+        self.ignore_button.setEnabled(suspicious and bool(self.selected_detection_hash()))
+
+    def quarantine_suspicious(self):
+        record = self.selected_record()
+        if not record or record[2] != "suspicious":
+            return
+        try:
+            QuarantineManager().quarantine(Path(record[1]), record[3])
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not quarantine", f"{record[1]}: {exc}")
+            return
+        self.db.mark_quarantined(record[1])
+        self.refresh()
+        self.count.setText("File moved to quarantine.")
+
+    def ignore_suspicious(self):
+        record = self.selected_record()
+        digest = self.selected_detection_hash()
+        if not record or record[2] != "suspicious" or not digest:
+            return
+        self.db.ignore_file(digest, record[1])
+        self.refresh()
+        self.count.setText("This file will not be reported again unless its contents change.")
 
     def lookup_detection(self):
         url = virustotal.file_url(self.selected_detection_hash())

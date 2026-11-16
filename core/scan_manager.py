@@ -21,12 +21,13 @@ class ScanManager:
         error_callback=None,
         summary_callback=None,
         name="Scan",
+        background=False,
     ):
 
         if self.thread and self.thread.isRunning():
             return False
         self.thread = QThread()
-        self.worker = ScanWorker(folders, name)
+        self.worker = ScanWorker(folders, name, background=background)
 
         self.worker.moveToThread(self.thread)
 
@@ -57,6 +58,13 @@ class ScanManager:
     def cancel(self):
         if self.thread and self.thread.isRunning():
             self.worker.cancelled.set()
+
+    def pause(self, paused=True):
+        """Hold or continue the running scan; returns whether there was one."""
+        if self.thread and self.thread.isRunning():
+            (self.worker.paused.set if paused else self.worker.paused.clear)()
+            return True
+        return False
 
     def shutdown(self):
         if self.thread and self.thread.isRunning():

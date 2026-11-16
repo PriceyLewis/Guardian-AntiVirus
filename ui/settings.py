@@ -105,17 +105,23 @@ class SettingsPage(QWidget):
             ("Protection", "Monitoring covers the folders listed under Monitored folders.", [
                 ("realtime", "Monitor files in real time", "Scan created, changed and moved files. Turning this off stops new monitoring work; an engine call may still be finishing."),
                 ("archives", "Inspect archives", "Apply to subsequent scans. When off, Guardian uses clamscan with archive inspection disabled. Daemon limits still apply when on."),
-                ("skip_unchanged", "Skip files that have not changed", "Scans pass over files already found clean that have not been modified since. Everything is checked again whenever virus definitions update. Turn off to check every file on every scan.")]),
+                ("skip_unchanged", "Skip files that have not changed", "Scans pass over files already found clean that have not been modified since. Everything is checked again whenever virus definitions update. Turn off to check every file on every scan."),
+                ("skip_media", "Skip audio, video and image files in folder scans", "These are large, slow to scan and rarely carry threats. Files you pick yourself are always scanned, and real-time monitoring is not affected."),
+                ("max_scan_size_mb", "Largest file to scan in folder scans", "Bigger files, such as disk images, are passed over. Files you pick yourself are always scanned.", [("No limit", 0), ("100 MB", 100), ("500 MB", 500), ("2 GB", 2000)]),
+                ("removable_prompt", "Offer to scan USB drives when they are plugged in", "Ask whether to scan a removable drive as soon as the desktop mounts it.")]),
             ("Extra detection engines", "A second opinion on files ClamAV finds clean. Both use free lists stored in Guardian's own folder; download them under Threat lists below.", [
                 ("hash_lookup", "Check files against known-malware fingerprints", "Compare each file's SHA-256 with lists of known malware. An exact match is quarantined like any other detection."),
                 ("yara_scan", "Scan with YARA-X rules", "Match community pattern rules that recognise malware families and variants. Needs the yara-x Python package."),
-                ("yara_quarantine", "Quarantine files matched only by YARA rules", "Pattern rules misfire more often than signatures. When off, such files are reported as detections in History and left where they are, so you can look them up first.")]),
+                ("yara_quarantine", "Quarantine files matched only by YARA rules", "Pattern rules misfire more often than signatures. When off, such files are marked Suspicious in History and left where they are, so you can look them up, quarantine or ignore them."),
+                ("auto_update_lists", "Update threat lists automatically", "Download the latest hash list and rules once a day while Guardian is open.")]),
             ("Schedule", "Scheduled scans run while Guardian is open, including when it is hidden in the tray.", [
                 ("scheduled_scan", "Run a daily quick scan", "Start a quick scan once a day."),
                 ("weekly_home_scan", "Run a weekly home scan", "Check your whole home folder once a week. This can take a long time on large folders."),
-                ("scan_hour", "Preferred time", "Scheduled scans wait until this time of day. If Guardian was closed then, they run when it next opens.", hours)]),
-            ("Quarantine", "Quarantined files stay isolated until you restore or delete them.", [
-                ("quarantine_retention_days", "Automatically delete quarantined files", "Old quarantined files are permanently deleted once they reach this age.", [("Never", 0), ("After 30 days", 30), ("After 90 days", 90)])]),
+("gentle_scheduled", "Run scheduled scans gently", "Scheduled scans use one worker at low processor and disk priority, so they take longer but stay out of your way."),
+                                ("scan_hour", "Preferred time", "Scheduled scans wait until this time of day. If Guardian was closed then, they run when it next opens.", hours)]),
+            ("Quarantine & history", "Quarantined files stay isolated until you restore or delete them.", [
+                ("quarantine_retention_days", "Automatically delete quarantined files", "Old quarantined files are permanently deleted once they reach this age.", [("Never", 0), ("After 30 days", 30), ("After 90 days", 90)]),
+                ("history_retention_days", "Keep scan history for", "Older per-file results are deleted. Quarantined files are not affected.", [("Forever", 0), ("30 days", 30), ("90 days", 90), ("1 year", 365)])]),
             ("Desktop", "Control how Guardian fits into your desktop.", [
                 ("notifications", "Show desktop notifications", "Receive a notification when a threat is quarantined. Requires a working desktop notification service."),
                 ("download_notifications", "Tell me when a download has been checked", "Show the result when real-time monitoring checks a new file in your Downloads folder, with a button to look it up on VirusTotal. Needs notifications and real-time monitoring."),
@@ -164,6 +170,9 @@ class SettingsPage(QWidget):
         self.threats_button = button("Update threat lists", self.update_threat_lists)
         actions.addWidget(self.threats_button)
         actions.addWidget(button("Open folder", self.open_threat_folder))
+        self.ignored_button = button("Stop ignoring files", self.clear_ignored)
+        self.ignored_button.setToolTip("Files you chose to ignore after a YARA match will be reported again.")
+        actions.addWidget(self.ignored_button)
         actions.addStretch()
         group.addLayout(actions)
         self.threats_result = label("")
@@ -274,12 +283,32 @@ class SettingsPage(QWidget):
 
     def check_threat_lists(self):
         text, attention = engines.describe(engines.status())
+        db = GuardianDatabase()
+        try:
+            ignored = len(db.ignored_hashes())
+        finally:
+            db.close()
+        self.ignored_button.setVisible(bool(ignored))
+        if ignored:
+            text += f" · {ignored} file{'' if ignored == 1 else 's'} ignored"
         self.threats_status.setText(text)
         self.threats_status.setObjectName("warning" if attention else "muted")
         self.threats_status.style().unpolish(self.threats_status)
         self.threats_status.style().polish(self.threats_status)
 
+    def clear_ignored(self):
+        db = GuardianDatabase()
+        try:
+            count = db.clear_ignored()
+        finally:
+            db.close()
+        self.threats_result.setText(f"{count} ignored file{'' if count == 1 else 's'} will be reported again if they still match.")
+        self.threats_result.show()
+        self.check_threat_lists()
+
     def update_threat_lists(self):
+        if not self.threats_button.isEnabled():
+            return
         self.threats_button.setEnabled(False)
         self.threats_result.setText("Downloading… this can take a minute the first time.")
         self.threats_result.show()

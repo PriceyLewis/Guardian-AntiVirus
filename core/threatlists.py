@@ -87,10 +87,29 @@ def explain(exc):
     return str(exc) or exc.__class__.__name__
 
 
+# Seconds between automatic updates.
+UPDATE_INTERVAL = 24 * 60 * 60
+
+
+def stamp():
+    return paths.THREATS / ".last-update"
+
+
+def due(now=None):
+    """True when the lists have not been refreshed, or tried, within the last day."""
+    import time
+    try:
+        return (now or time.time()) - stamp().stat().st_mtime >= UPDATE_INTERVAL
+    except OSError:
+        return True
+
+
 def update(fetch=fetch):
     """Refresh every list. Returns [(name, succeeded, message)]; one failure does not stop the others."""
     for folder in (hash_folder(), rule_folder()):
         os.makedirs(folder, exist_ok=True)
+    # Recorded for failures too, so an unreachable server is retried daily rather than constantly.
+    _replace(str(stamp()), lambda file: file.write(b""))
     outcome = []
     for name, action in (("MalwareBazaar hash list", update_hashes), ("YARA Forge core rules", update_rules)):
         try:

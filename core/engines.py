@@ -12,7 +12,9 @@ import io
 import mmap
 import os
 import re
+import tarfile
 import tempfile
+import zipfile
 import time
 from bisect import bisect_left
 from collections import deque
@@ -36,6 +38,10 @@ IN_MEMORY_LIMIT = 32 * 1024 * 1024
 YARA_SIZE_LIMIT = 512 * 1024 * 1024
 YARA_TIMEOUT = 60
 HASH_NAME = "Guardian.KnownMalware.SHA256"
+# Archives are opened one level deep, within limits that a hostile archive cannot push past.
+ARCHIVE_MEMBERS = 200
+ARCHIVE_MEMBER_SIZE = 32 * 1024 * 1024
+ARCHIVE_TOTAL_SIZE = 128 * 1024 * 1024
 # YARA-X holds Python's interpreter lock while it scans, so threads do not speed it up.
 # Large scans use separate processes instead; each loads its own copy of the rules.
 PROCESSES = min(4, os.cpu_count() or 1)
@@ -81,6 +87,31 @@ def _replace(path, write):
     finally:
         if os.path.exists(name):
             os.unlink(name)
+
+
+def _ignored():
+    from database.database import GuardianDatabase
+    try:
+        db = GuardianDatabase()
+        try:
+            return db.ignored_hashes()
+        finally:
+            db.close()
+    except Exception:
+        return frozenset()
+
+
+def _sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _head(path):
+    with open(path, "rb") as file:
+        return file.read(512)
 
 
 class HashList:
@@ -211,8 +242,11 @@ class YaraRules:
 class SecondOpinion:
     """The extra engines the user has switched on, loaded on first use."""
 
-    def __init__(self, use_hashes=None, use_yara=None):
+    def __init__(self, use_hashes=None, use_yara=None, ignored=None, archives=None):
         settings = load_config()
+        self.archives = settings["archives"] if archives is None else archives
+        # SHA-256 of files the user chose to ignore after a pattern-rule match.
+        self.ignored = _ignored() if ignored is None else frozenset(ignored)
         self.use_hashes = settings["hash_lookup"] if use_hashes is None else use_hashes
         self.use_yara = (settings["yara_scan"] if use_yara is None else use_yara) and yara_x is not None
         self.made = time.monotonic()
@@ -220,6 +254,8 @@ class SecondOpinion:
         self.loaded = False
         self.hashes = None
         self.yara = None
+        # Background scans keep to one thread instead of several worker processes.
+        self.gentle = False
         self.identity = self._identity()
 
     def _identity(self):
@@ -228,6 +264,8 @@ class SecondOpinion:
             parts.append("hashes=" + _fingerprint(_files(hash_folder(), (".txt",))))
         if self.use_yara:
             parts.append("yara=" + _fingerprint(_files(rule_folder(), RULE_SUFFIXES), getattr(yara_x, "__version__", None) or "yara-x"))
+        if parts:
+            parts.append(f"inside-archives={self.archives}")
         return "|".join(parts)
 
     def key(self):
@@ -239,7 +277,8 @@ class SecondOpinion:
         if time.monotonic() - self.made < FRESH_SECONDS:
             return False
         settings = load_config()
-        fresh = (settings["hash_lookup"], settings["yara_scan"] and yara_x is not None) == (self.use_hashes, self.use_yara) and self._identity() == self.identity
+        fresh = ((settings["hash_lookup"], settings["yara_scan"] and yara_x is not None, settings["archives"]) == (self.use_hashes, self.use_yara, self.archives)
+                 and self._identity() == self.identity and _ignored() == self.ignored)
         if fresh:
             self.made = time.monotonic()
         return not fresh
@@ -281,12 +320,68 @@ class SecondOpinion:
                         digest.update(block)
             if self.hashes and self.hashes.count and digest.digest() in self.hashes:
                 return {"status": "found", "virus": HASH_NAME, "engine": "hash", "sha256": digest.hexdigest()}
+            found = None
             if self.yara and self.yara.rules and size <= YARA_SIZE_LIMIT:
                 name = self.yara.match(path, data)
                 if name:
-                    return {"status": "found", "virus": name, "engine": "yara"}
+                    found = {"status": "found", "virus": name, "engine": "yara"}
+            if not found and self.archives and size <= ARCHIVE_TOTAL_SIZE:
+                found = self._check_archive(path, data)
+            if found and found["engine"] == "yara" and self.ignored:
+                found["sha256"] = digest.hexdigest() if data is not None or (self.hashes and self.hashes.count) else _sha256(path)
+                if found["sha256"] in self.ignored:
+                    return None
+            return found
         except Exception as exc:
             log.warning("Second-opinion check failed for %s: %s", paths.display(path), exc)
+        return None
+
+    def _check_member(self, name, data):
+        if self.hashes and self.hashes.count and hashlib.sha256(data).digest() in self.hashes:
+            return {"status": "found", "virus": f"{HASH_NAME} (in archive: {name})", "engine": "hash"}
+        if self.yara and self.yara.rules:
+            match = self.yara.match(data=data)
+            if match:
+                return {"status": "found", "virus": f"{match} (in archive: {name})", "engine": "yara"}
+        return None
+
+    def _check_archive(self, path, data):
+        """Check the files inside a zip or tar archive, as ClamAV does for its own signatures."""
+        source = io.BytesIO(data) if data is not None else None
+        head = data[:512] if data is not None else _head(path)
+        total = 0
+        try:
+            if head[:4] in (b"PK\x03\x04", b"PK\x05\x06"):
+                with zipfile.ZipFile(source or path) as archive:
+                    for member in archive.infolist()[:ARCHIVE_MEMBERS]:
+                        # Declared sizes can lie, so the read itself is capped too.
+                        if member.is_dir() or member.flag_bits & 1 or member.file_size > ARCHIVE_MEMBER_SIZE:
+                            continue
+                        with archive.open(member) as file:
+                            content = file.read(ARCHIVE_MEMBER_SIZE + 1)
+                        total += len(content)
+                        if len(content) > ARCHIVE_MEMBER_SIZE or total > ARCHIVE_TOTAL_SIZE:
+                            break
+                        found = self._check_member(paths.display(member.filename)[:120], content)
+                        if found:
+                            return found
+            elif head[:2] in (b"\x1f\x8b", b"BZ") or head[:6] == b"\xfd7zXZ\x00" or head[257:262] == b"ustar":
+                with tarfile.open(name=None if source else path, fileobj=source, mode="r:*") as archive:
+                    for count, member in enumerate(archive):
+                        if count >= ARCHIVE_MEMBERS:
+                            break
+                        if not member.isfile() or member.size > ARCHIVE_MEMBER_SIZE:
+                            continue
+                        content = archive.extractfile(member).read(ARCHIVE_MEMBER_SIZE + 1)
+                        total += len(content)
+                        if len(content) > ARCHIVE_MEMBER_SIZE or total > ARCHIVE_TOTAL_SIZE:
+                            break
+                        found = self._check_member(paths.display(member.name)[:120], content)
+                        if found:
+                            return found
+        except Exception:
+            # Damaged, encrypted or merely archive-like files are ClamAV's to judge.
+            return None
         return None
 
     def review(self, results, expected=0):
@@ -299,10 +394,10 @@ class SecondOpinion:
         if not self.active():
             yield from results
             return
-        if expected >= PROCESS_THRESHOLD and PROCESSES > 1:
+        if expected >= PROCESS_THRESHOLD and PROCESSES > 1 and not self.gentle:
             # 'spawn' starts clean interpreters; forking a process that has threads and a GUI is unsafe.
             pool = ProcessPoolExecutor(PROCESSES, mp_context=get_context("spawn"), initializer=_start_process,
-                                       initargs=(str(paths.THREATS), self.use_hashes, self.use_yara))
+                                       initargs=(str(paths.THREATS), self.use_hashes, self.use_yara, sorted(self.ignored), self.archives))
             check, ahead = _process_check, 8 * PROCESSES
         else:
             pool = ThreadPoolExecutor(1, thread_name_prefix="guardian-second-opinion")
@@ -348,12 +443,12 @@ class SecondOpinion:
 _process_engines = None
 
 
-def _start_process(threats, use_hashes, use_yara):
-    """Runs once in each worker process: point it at the same lists as its parent."""
+def _start_process(threats, use_hashes, use_yara, ignored, archives):
+    """Runs once in each worker process: point it at the same lists and choices as its parent."""
     global _process_engines
     from pathlib import Path
     paths.THREATS = Path(threats)
-    _process_engines = SecondOpinion(use_hashes, use_yara)
+    _process_engines = SecondOpinion(use_hashes, use_yara, ignored, archives)
 
 
 def _process_check(path):

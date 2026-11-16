@@ -59,12 +59,15 @@ class ProtectionCard(Card):
         self.definitions.setWordWrap(True)
         self.engine = QLabel("Scan engine: Checking")
         self.engine.setWordWrap(True)
+        self.second = QLabel("Second opinion: Checking")
+        self.second.setWordWrap(True)
         self.last_scan = QLabel("No scans yet")
 
         for label in (
             self.realtime,
             self.definitions,
             self.engine,
+            self.second,
             self.last_scan,
         ):
             label.setObjectName("subtitle")
@@ -76,6 +79,7 @@ class ProtectionCard(Card):
         layout.addWidget(self.realtime)
         layout.addWidget(self.definitions)
         layout.addWidget(self.engine)
+        layout.addWidget(self.second)
         layout.addWidget(self.last_scan)
 
 

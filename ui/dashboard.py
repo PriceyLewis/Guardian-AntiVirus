@@ -9,7 +9,7 @@ from core.scanner import daemon_socket, describe_engine
 from config import load_config
 from database.database import GuardianDatabase
 from ui.widgets import StatCard, ProtectionCard, RecentActivityCard
-from core import daemon, virustotal
+from core import daemon, engines, virustotal
 from core.quarantine import sha256
 from ui.components import heading, card, label, button, open_in_browser, steps_dialog
 
@@ -62,6 +62,10 @@ class DashboardPage(QWidget):
         row = QHBoxLayout()
         self.scan_state = label("Ready to scan", "sectionTitle")
         row.addWidget(self.scan_state, 1)
+        self.pause_button = button("Pause", self.toggle_pause)
+        self.pause_button.setEnabled(False)
+        row.addWidget(self.pause_button)
+        self.paused = False
         self.cancel_button = button("Cancel scan", self.cancel_scan)
         self.cancel_button.setEnabled(False)
         row.addWidget(self.cancel_button)
@@ -116,6 +120,7 @@ class DashboardPage(QWidget):
         if time.monotonic() - self.daemon_checked >= DAEMON_CHECK_INTERVAL:
             self.daemon_connected = bool(daemon_socket(timeout=0.5))
             self.daemon_checked = time.monotonic()
+            self.protection.second.setText(describe_second_opinion(engines.status(), self.db.get_suspicious_count()))
         connected = self.daemon_connected
         self.protection.engine.setText(describe_engine(connected, load_config()["archives"]))
         self.daemon_button.setVisible(not connected)
@@ -126,7 +131,7 @@ class DashboardPage(QWidget):
             when = datetime.fromisoformat(timestamp).strftime("%d %b, %H:%M")
             self.protection.last_scan.setText(f"Last scan: {name} {state} · {when} · {scanned:,} files in {format_duration(duration)}")
 
-    def start_scan(self, scan_function, name="Scan"):
+    def start_scan(self, scan_function, name="Scan", background=False):
         if self.scan_active or (self.scan_manager.thread and self.scan_manager.thread.isRunning()):
             return
         self.scan_errors = []
@@ -135,6 +140,9 @@ class DashboardPage(QWidget):
         self.scan_active = True
         self.buttons.setEnabled(False)
         self.cancel_button.setEnabled(True)
+        self.pause_button.setEnabled(True)
+        self.pause_button.setText("Pause")
+        self.paused = False
         self.progress.setRange(0, 0)
         self.scan_state.setText(name + " · Preparing")
         self.current_file.setText("Collecting files…")
@@ -145,13 +153,13 @@ class DashboardPage(QWidget):
         self.error_text.clear()
         scan_function(progress_callback=self.update_progress, maximum_callback=self.set_maximum,
                       current_file_callback=self.set_current_file, finished_callback=self.scan_finished,
-                      error_callback=self.scan_error, summary_callback=self.receive_summary)
+                      error_callback=self.scan_error, summary_callback=self.receive_summary, background=background)
 
-    def quick_scan(self):
-        self.start_scan(self.scan_manager.quick_scan, "Quick scan")
+    def quick_scan(self, background=False):
+        self.start_scan(self.scan_manager.quick_scan, "Quick scan", background)
 
-    def full_scan(self):
-        self.start_scan(self.scan_manager.full_scan, "Home scan")
+    def full_scan(self, background=False):
+        self.start_scan(self.scan_manager.full_scan, "Home scan", background)
 
     def custom_scan(self):
         if self.scan_active:
@@ -226,17 +234,32 @@ class DashboardPage(QWidget):
             self.open_report(virustotal.file_url(digest), path)
             self.lookup_text.setText(self.lookup_text.text() + " If VirusTotal has no report, no one has submitted this file before; that alone does not mean it is safe.")
 
+    def toggle_pause(self):
+        if not self.scan_active or not self.scan_manager.pause(not self.paused):
+            return
+        self.paused = not self.paused
+        self.pause_button.setText("Resume" if self.paused else "Pause")
+        self.scan_state.setText(self.scan_name + (" · Paused" if self.paused else " · Scanning"))
+        if self.paused:
+            self.current_file.setText("Paused. Files already checked are kept; choose Resume to carry on.")
+
     def cancel_scan(self):
         self.scan_manager.cancel()
         self.cancel_button.setEnabled(False)
+        self.pause_button.setEnabled(False)
         self.scan_state.setText("Stopping after the current file…")
 
     @Slot(int)
     def set_maximum(self, maximum):
         self.progress.setRange(0, max(maximum, 1))
+        # Files are collected; from here the engines are at work.
+        if self.scan_active and not self.paused:
+            self.scan_state.setText(self.scan_name + " · Scanning")
 
     @Slot(str)
     def set_current_file(self, path):
+        if self.paused:
+            return
         self.current_file.setText(path if len(path) < 140 else "…" + path[-139:])
         self.current_file.setToolTip(path)
 
@@ -262,6 +285,9 @@ class DashboardPage(QWidget):
         self.scan_active = False
         self.buttons.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.pause_button.setEnabled(False)
+        self.pause_button.setText("Pause")
+        self.paused = False
         summary = self.last_summary or {"cancelled": False, "errors": len(self.scan_errors), "found": 0, "clean": 0, "quarantined": 0}
         state = "Scan cancelled" if summary["cancelled"] else ("Finished with errors" if summary["errors"] else "Scan complete")
         self.scan_state.setText(state)
@@ -275,14 +301,32 @@ class DashboardPage(QWidget):
         unchanged = f" ({summary['unchanged']:,} unchanged, not rechecked)" if summary.get("unchanged") else ""
         self.detections = list(summary.get("detections", []))
         self.detections_button.setVisible(bool(self.detections))
-        flagged = f" ({summary['flagged']} matched by YARA rules only, left in place)" if summary.get("flagged") else ""
-        self.result_text.setText(f"Clean: {summary['clean']}{unchanged}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}{flagged}   •   Errors: {summary['errors']}{took}")
+        flagged = f"   •   Suspicious: {summary['flagged']} (see History)" if summary.get("flagged") else ""
+        skipped = f"   •   Skipped: {summary['skipped']:,} large or media" if summary.get("skipped") else ""
+        self.result_text.setText(f"Clean: {summary['clean']}{unchanged}   •   Detections: {summary['found']}   •   Quarantined: {summary['quarantined']}{flagged}   •   Errors: {summary['errors']}{skipped}{took}")
         self.error_text.setText("\n".join(self.scan_errors))
         self.refresh_dashboard()
         # Tray-started and scheduled scans may finish while the window is hidden.
         if not self.window().isVisible():
             found = f"{summary['found']} threat{'s' if summary['found'] != 1 else ''} found" if summary["found"] else "no threats found"
             GuardianNotifier.notify("Guardian", f"{self.scan_name}: {state.lower()}, {scanned:,} file{'s' if scanned != 1 else ''} checked, {found}.")
+
+
+def describe_second_opinion(state, suspicious=0):
+    """One line for the Overview page on what the extra engines have to work with."""
+    parts = []
+    if state["hash_lookup"] and state["hashes"]:
+        parts.append(f"{state['hashes']:,} known-malware fingerprints")
+    if state["yara_scan"] and state["yara_installed"] and state["rule_files"]:
+        parts.append("YARA-X rules loaded")
+    if not parts:
+        wanted = state["hash_lookup"] or state["yara_scan"]
+        text = "Second opinion: not set up · download threat lists in Settings" if wanted else "Second opinion: switched off"
+    else:
+        text = "Second opinion: " + " · ".join(parts)
+    if suspicious:
+        text += f" · {suspicious} suspicious file{'' if suspicious == 1 else 's'} to review in History"
+    return text
 
 
 # Seconds between checks for the daemon's socket.

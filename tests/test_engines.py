@@ -85,14 +85,15 @@ def test_yara_match_is_reported_and_left_in_place_unless_asked(threats,monkeypat
     (folder/'marked').write_bytes(MARKED);(folder/'fine').write_bytes(b'ordinary')
     threats.rule()
     summary,results=run_worker(monkeypatch,[folder])
-    assert results['marked']==('found','YARA.Guardian_Test_Marker') and results['fine']==('clean','')
-    assert summary['found']==1 and summary['quarantined']==0 and summary['flagged']==1 and (folder/'marked').exists()
+    assert results['marked']==('suspicious','YARA.Guardian_Test_Marker') and results['fine']==('clean','')
+    assert summary['found']==0 and summary['quarantined']==0 and summary['flagged']==1 and (folder/'marked').exists()
+    assert summary['detections']==[hashlib.sha256(MARKED).hexdigest()]
     # Never remembered as clean: it is reported again next time.
     seen=[];summary,_=run_worker(monkeypatch,[folder],clean_engine(seen))
-    assert [p.name for p in seen]==['marked'] and summary['unchanged']==1 and summary['found']==1
+    assert [p.name for p in seen]==['marked'] and summary['unchanged']==1 and summary['flagged']==1
     config.save_config(dict(config.load_config(),yara_quarantine=True))
-    summary,_=run_worker(monkeypatch,[folder])
-    assert summary['quarantined']==1 and summary['flagged']==0 and not (folder/'marked').exists()
+    summary,results=run_worker(monkeypatch,[folder])
+    assert results['marked'][0]=='found' and summary['quarantined']==1 and summary['flagged']==0 and not (folder/'marked').exists()
 
 def test_yara_skips_rule_files_that_do_not_compile(threats):
     pytest.importorskip('yara_x')
@@ -196,7 +197,7 @@ def test_real_time_monitoring_gets_a_second_opinion(threats,monkeypatch):
     assert notes[0]=='Threat quarantined: known.exe' and notes[1].startswith('Suspicious file: marked.doc matches YARA.Guardian_Test_Marker')
     from database.database import GuardianDatabase
     db=GuardianDatabase();rows={Path(r[1]).name:(r[2],r[3]) for r in db.recent_scans(5)}
-    assert rows=={'known.exe':('found','Guardian.KnownMalware.SHA256'),'marked.doc':('found','YARA.Guardian_Test_Marker')}
+    assert rows=={'known.exe':('found','Guardian.KnownMalware.SHA256'),'marked.doc':('suspicious','YARA.Guardian_Test_Marker')}
     assert db.detection_hash(str(marked))==hashlib.sha256(MARKED).hexdigest();db.close()
 
 def test_engines_notice_new_lists_and_settings(threats,monkeypatch):
@@ -228,7 +229,7 @@ def test_threat_list_update_downloads_merges_and_reports_failures(threats):
     outcome=threatlists.update(fetch)
     assert outcome==[('MalwareBazaar hash list',True,'2 fingerprints (2 new)'),('YARA Forge core rules',True,'2 rules')]
     assert asked==[threatlists.BAZAAR_FULL,threatlists.FORGE_CORE]
-    assert sorted(p.name for p in threats.folder.rglob('*') if p.is_file())==['malwarebazaar.txt','yara-forge-core.yar'] and not (threats.folder.parent/'evil.sh').exists()
+    assert sorted(p.name for p in threats.folder.rglob('*') if p.is_file())==['.last-update','malwarebazaar.txt','yara-forge-core.yar'] and not (threats.folder.parent/'evil.sh').exists()
     # Later updates fetch only the recent additions and merge them in.
     asked.clear();assert threatlists.update(fetch)[0]==('MalwareBazaar hash list',True,'3 fingerprints (1 new)')
     assert asked[0]==threatlists.BAZAAR_RECENT and HashList().count==3

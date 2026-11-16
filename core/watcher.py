@@ -122,8 +122,10 @@ class GuardianWatcher(FileSystemEventHandler):
                 result = self.extra.check(file) or result
             if self.stopping.is_set():
                 return
+            if result["status"] == "found" and result.get("engine") == "yara" and not load_config()["yara_quarantine"]:
+                result = dict(result, status="suspicious")
             digest = None
-            if result["status"] == "found":
+            if result["status"] in ("found", "suspicious"):
                 try:
                     digest = result.get("sha256") or sha256(file)
                 except OSError:
@@ -136,7 +138,7 @@ class GuardianWatcher(FileSystemEventHandler):
                 if len(self.scanned) > 10000:
                     self.scanned.clear()
                 self.scanned[file] = signature
-            if result["status"] == "found" and result.get("engine") == "yara" and not load_config()["yara_quarantine"]:
+            if result["status"] == "suspicious":
                 log.warning("Real-time YARA match %s in %s (not quarantined)", result.get("virus"), display(file))
                 GuardianNotifier.notify("Guardian", f"Suspicious file: {display(file.name)} matches {result.get('virus')}. It was not quarantined; see History.")
             elif result["status"] == "found":
