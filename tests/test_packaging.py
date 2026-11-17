@@ -85,11 +85,13 @@ def test_flatpak_update_failure_advice(flatpak,app):
     assert 'Check your internet connection' in text and 'sudo' not in text
     page.shutdown()
 
-def test_flatpak_autostart_runs_through_flatpak(flatpak):
+def test_flatpak_autostart_runs_through_flatpak(flatpak,monkeypatch):
     from core import startup
     entry=startup.desktop_entry('--minimized')
     assert 'Exec=flatpak run "io.github.priceylewis.Guardian" --minimized' in entry and 'Icon=io.github.priceylewis.Guardian' in entry
     with pytest.raises(RuntimeError):startup.set_menu_entry(True)
+    monkeypatch.setenv('XDG_CONFIG_HOME','/sandbox/config')
+    assert startup.startup_path()==Path.home()/'.config'/'autostart'/'io.github.priceylewis.Guardian.desktop'
 
 def test_cli_updates_definitions(flatpak,monkeypatch):
     from core import cli

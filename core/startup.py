@@ -8,6 +8,10 @@ ICON = ROOT / "assets" / "icons" / "Guardian.png"
 
 
 def startup_path():
+    app = flatpak_id()
+    if app:
+        # Inside the sandbox XDG_CONFIG_HOME is private; the desktop reads the real ~/.config.
+        return Path.home() / ".config" / "autostart" / f"{app}.desktop"
     return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "autostart" / "guardian.desktop"
 
 

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Guardian Antivirus
+GenericName=Virus Scanner
+Comment=Scan files and monitor folders with ClamAV
+Exec=guardian
+Icon=io.github.priceylewis.Guardian
+Categories=System;Security;
+Keywords=antivirus;virus;malware;scan;clamav;yara;quarantine;
+StartupNotify=true
+Terminal=false
