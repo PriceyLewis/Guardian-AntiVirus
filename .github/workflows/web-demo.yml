@@ -15,7 +15,8 @@ concurrency:
 
 jobs:
   test-and-publish:
-    runs-on: ubuntu-latest
+    # Playwright 1.55 does not support the ubuntu-latest image (26.04) yet.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
