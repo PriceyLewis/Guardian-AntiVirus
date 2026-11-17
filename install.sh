@@ -6,14 +6,15 @@
 # Supports Debian, Ubuntu and Mint (apt), Fedora and RHEL (dnf), Arch (pacman)
 # and openSUSE (zypper). It asks for your password once, to install ClamAV and
 # start its update service and scanning daemon; Guardian itself is installed
-# for your user only, with pipx.
+# for your user only, with pipx. Running it again updates Guardian to the
+# newest release.
 #
 #   sh install.sh --uninstall   removes Guardian (ClamAV and your data are kept)
 #   sh install.sh --no-system   skips the system packages (ClamAV already set up)
 set -eu
 
 REPOSITORY="https://github.com/PriceyLewis/Guardian-AntiVirus"
-SOURCE="${GUARDIAN_SOURCE:-$REPOSITORY/archive/refs/heads/main.tar.gz}"
+LATEST_API="https://api.github.com/repos/PriceyLewis/Guardian-AntiVirus/releases/latest"
 SYSTEM=1
 ACTION=install
 
@@ -110,12 +111,32 @@ if [ "$SYSTEM" = 1 ]; then
     service "$DAEMON" "faster scans"
 fi
 
+latest_tag() {
+    # The newest published release, e.g. v1.2.0; empty when there is none or GitHub cannot be reached.
+    if have curl; then
+        curl -fsSL "$LATEST_API" 2>/dev/null
+    elif have wget; then
+        wget -qO- "$LATEST_API" 2>/dev/null
+    fi | sed -n 's/.*"tag_name": *"\(v[0-9][0-9.]*\)".*/\1/p' | head -n 1
+}
+
+if [ -n "${GUARDIAN_SOURCE:-}" ]; then
+    SOURCE="$GUARDIAN_SOURCE"
+else
+    TAG="$(latest_tag || true)"
+    if [ -n "$TAG" ]; then
+        SOURCE="$REPOSITORY/archive/refs/tags/$TAG.tar.gz"
+    else
+        SOURCE="$REPOSITORY/archive/refs/heads/main.tar.gz"
+    fi
+fi
+
 if ! have pipx; then
     warn "pipx is not installed. Install it with your package manager, then run this again."
     exit 1
 fi
 
-say "Installing Guardian"
+say "Installing Guardian ${TAG:-from the latest source}"
 # YARA-X is optional; fall back to Guardian without it on systems it does not support.
 if ! pipx install --force "guardian-antivirus[yara] @ $SOURCE"; then
     warn "Installing with YARA-X failed; installing Guardian without it."
@@ -135,4 +156,5 @@ case ":$PATH:" in
     *":$BIN:"*) ;;
     *) echo "Open a new terminal first so the guardian command is found." ;;
 esac
+echo "To update later, run this installer again; Guardian also tells you on its Overview page when a new version is out."
 echo "To remove it later: sh install.sh --uninstall"

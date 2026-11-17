@@ -85,13 +85,24 @@ The script asks for your password once. It installs ClamAV with its update servi
 
 ### Flatpak
 
-Each tagged release attaches **Guardian.flatpak** to its [release page](https://github.com/PriceyLewis/Guardian-AntiVirus/releases). Install it with:
+Install from Guardian's own Flatpak repository, so updates arrive through `flatpak update` and your software centre:
 
 ```sh
-flatpak install --user Guardian.flatpak
+flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+flatpak remote-add --user --if-not-exists --no-gpg-verify guardian https://priceylewis.github.io/Guardian-AntiVirus/repo/
+flatpak install --user guardian io.github.priceylewis.Guardian
 ```
 
+The first line adds Flathub, which provides the runtime Guardian is built on. `--no-gpg-verify` is needed while the repository is unsigned; if a signing key is configured (see [`packaging/flatpak`](./packaging/flatpak)), use `flatpak remote-add --user guardian https://priceylewis.github.io/Guardian-AntiVirus/guardian.flatpakrepo` instead. Each tagged release also attaches **Guardian.flatpak** to its [release page](https://github.com/PriceyLewis/Guardian-AntiVirus/releases) for a one-off install with `flatpak install --user Guardian.flatpak`; a copy installed that way does not update itself.
+
 The Flatpak needs no other setup: it includes its own ClamAV, downloads virus definitions itself and keeps them current daily. It cannot reach your system's ClamAV daemon, so scans use `clamscan`, which is slower on very large folders; the native install above is faster there. The bundle is built and smoke-tested by [`.github/workflows/flatpak.yml`](./.github/workflows/flatpak.yml) from [`packaging/flatpak`](./packaging/flatpak), and its permissions are listed in the manifest: your home folder and removable drives (to scan them), the network (definitions, threat lists and lookups), notifications and the system tray.
+
+### Updating
+
+- **Installed with the one-command installer or pipx:** Guardian checks GitHub once a day and, when a new release is out, shows it on the Overview page with an **Update now** button, then a **Restart** button. Running the installer again does the same. The check can be turned off in Settings.
+- **Flatpak from Guardian's repository:** `flatpak update`, or your software centre, installs new releases; Guardian's Overview page also tells you when one is out.
+- **Virus definitions** update themselves: through ClamAV's FreshClam service for native installs, and by Guardian itself, daily, in the Flatpak.
+- `guardian --version` prints the installed version.
 
 ### With pipx
 

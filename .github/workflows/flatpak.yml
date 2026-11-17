@@ -65,6 +65,12 @@ jobs:
           assert 'built into Guardian' in window.stack.widget(0).protection.engine.text()
           window.shutdown(); print('window ok')"
 
+      - name: Check the update repository can be built and installed from
+        env:
+          PUBLISH: '0'
+          GITHUB_TOKEN: unused
+        run: sh packaging/flatpak/publish-repository.sh Guardian.flatpak
+
   release:
     # Tagging a version (git tag v1.2.0 && git push origin v1.2.0) publishes the bundle.
     if: startsWith(github.ref, 'refs/tags/v')
@@ -83,3 +89,30 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --notes-file "RELEASE_NOTES_${GITHUB_REF_NAME}.md" 2>/dev/null || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --generate-notes
           gh release upload "$GITHUB_REF_NAME" Guardian.flatpak install.sh --clobber
+
+  repository:
+    # Publishes an update repository on the project's GitHub Pages site, so
+    # installed copies update with 'flatpak update' or a software centre.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    permissions:
+      contents: write
+    concurrency:
+      group: guardian-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v5
+        with:
+          name: Guardian-x86_64
+      - name: Add the release to the repository
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Optional: an ASCII-armoured private key, so users' Flatpak can verify updates.
+          GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: sh packaging/flatpak/publish-repository.sh Guardian.flatpak
+

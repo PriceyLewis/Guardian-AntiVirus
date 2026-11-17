@@ -8,9 +8,10 @@ on:
 permissions:
   contents: write
 
+# Shared with the Flatpak repository publisher, which writes to the same gh-pages branch.
 concurrency:
-  group: guardian-web-demo
-  cancel-in-progress: true
+  group: guardian-pages
+  cancel-in-progress: false
 
 jobs:
   test-and-publish:
@@ -353,6 +354,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Keep the Flatpak update repository that release builds publish alongside the demo.
+          if git clone --quiet --depth 1 --branch gh-pages "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/previous-pages; then
+            for kept in repo guardian.flatpakrepo io.github.priceylewis.Guardian.flatpakref; do
+              if [ -e "/tmp/previous-pages/$kept" ]; then cp -a "/tmp/previous-pages/$kept" dist/; fi
+            done
+          fi
           cd dist
           git init
           git config user.name "github-actions[bot]"
