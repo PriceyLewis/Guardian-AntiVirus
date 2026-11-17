@@ -90,3 +90,39 @@ code{background:#0e1520;border:1px solid #293548;border-radius:5px;padding:1px 5
 [data-theme=light] code{background:#e9eef5;border-color:#d8dee8}
 .table-action a.btn{text-decoration:none;padding:6px 8px;font-size:12px}
 #lookup-result,#scan-summary,.current-file{overflow-wrap:anywhere}
+
+/* ---- Retro black-and-white theme, matching the native app (assets/themes). ---- */
+:root{--paper:#000;--ink:#fff;--dim:#9a9a9a}
+[data-theme=light]{--paper:#fff;--ink:#000;--dim:#5f5f5f}
+html,body{background:var(--paper)!important;color:var(--ink)!important}
+body,button,input,select,textarea,code,pre{font-family:"DejaVu Sans Mono","Liberation Mono",ui-monospace,Menlo,Consolas,monospace!important}
+body *{background-color:var(--paper)!important;color:var(--ink)!important;border-color:var(--ink)!important;border-radius:0!important;box-shadow:none!important}
+body *::before{color:var(--dim)!important}
+.card,.stat-card,.table-wrap,.toolbar input,.toolbar select,.folder-add input,.setting-row select,.steps,code,.toast,.native-chip,.architecture-flow span,.status-icon,.progress-track{border:2px solid var(--ink)!important}
+.btn,.scan-option,a.btn{border:2px solid var(--ink)!important;font-weight:700}
+.btn:hover,.scan-option:hover:not(:disabled),.nav-item:hover,.text-button:hover,
+.btn:hover *,.scan-option:hover:not(:disabled) *,
+.nav-item.active,.scan-option.primary,.scan-option.primary *,th,.nav-badge,.status-pill,.status-icon,
+.demo-banner strong{background-color:var(--ink)!important;color:var(--paper)!important}
+.danger{border-style:dashed!important}
+.danger:hover{border-style:solid!important}
+button:disabled,.scan-option:disabled{border-style:dotted!important;color:var(--dim)!important}
+.muted,small,.page-heading p,.card>p,.section-title-row p,.scan-option span,.stat-card span,.stat-card small,.eyebrow,.current-file,.activity-item span,.setting-row small,.sidebar-footer,.demo-banner span,.protection-card p{color:var(--dim)!important}
+.protection-card h2,.stat-card strong,.card h2,.page-heading h1{color:var(--ink)!important}
+.result-found,.result-suspicious{font-weight:700;text-decoration:underline}
+.demo-banner{border-bottom:2px solid var(--ink)!important}
+.sidebar{border-right:2px solid var(--ink)!important}
+.brand{letter-spacing:4px}
+.shield{border:2px solid var(--ink)!important}
+/* Progress fills in solid blocks. */
+.progress-bar{background:repeating-linear-gradient(90deg,var(--ink) 0 10px,transparent 10px 13px)!important;transition:none}
+.progress-track{height:18px;padding:2px}
+tr td{border-top:1px solid var(--ink)!important}
+a{text-decoration:underline}
+input[type=checkbox]{accent-color:var(--ink)}
+/* Wider monospaced labels need button rows to wrap on phones. */
+.button-row{flex-wrap:wrap}
+/* Outrank the old coloured light-theme labels. */
+html[data-theme] .eyebrow{color:var(--dim)!important}
+html[data-theme] .brand{color:var(--ink)!important}
+html[data-theme] .demo-banner strong{background-color:var(--ink)!important;color:var(--paper)!important;padding:1px 6px}
