@@ -4,7 +4,7 @@ from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QMessageBox, QSystemTrayIcon
 from config import load_config
 from core.definitions import describe
-from core import threatlists
+from core import clamav, threatlists
 from core.mounts import removable_mounts
 from core.quarantine import QuarantineManager
 from core.watcher import Watcher
@@ -148,7 +148,8 @@ class MainWindow(QMainWindow):
         self.housekeeping_timer = QTimer(self)
         self.housekeeping_timer.timeout.connect(self.housekeeping)
         self.housekeeping_timer.start(HOUSEKEEPING_INTERVAL)
-        QTimer.singleShot(HOUSEKEEPING_DELAY, self.housekeeping)
+        # Without any definitions every scan would fail, so fetch them straight away.
+        QTimer.singleShot(5000 if clamav.private_database() and not clamav.has_definitions() else HOUSEKEEPING_DELAY, self.housekeeping)
         self.sidebar.setCurrentRow(0)
 
         sidebar_layout = QVBoxLayout()
@@ -292,7 +293,8 @@ class MainWindow(QMainWindow):
         process.finished.connect(lambda *_: self.definitions_checked(bytes(process.readAllStandardOutput()).decode(errors="replace")))
         process.errorOccurred.connect(self.definitions_error)
         self.definitions_process = process
-        process.start("clamscan", ["--version"])
+        command = clamav.version_command()
+        process.start(command[0], command[1:])
 
     def definitions_error(self, error):
         # finished is not emitted when clamscan is missing.
@@ -342,6 +344,10 @@ class MainWindow(QMainWindow):
             pass  # A locked database is simply tried again next hour.
         if settings["auto_update_lists"] and (settings["hash_lookup"] or settings["yara_scan"]) and threatlists.due():
             self.stack.widget(5).update_threat_lists()
+        dashboard.check_for_updates()
+        # Inside a Flatpak no FreshClam service exists, so Guardian keeps its own definitions current.
+        if clamav.definitions_due():
+            self.stack.widget(5).update_definitions()
 
     def check_removable(self):
         mounts = removable_mounts()

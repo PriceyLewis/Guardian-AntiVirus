@@ -62,3 +62,14 @@ def update_threat_lists(out=sys.stdout):
         out.write(f"{name}: {'updated, ' if succeeded else 'FAILED: '}{message}\n")
     return 0 if all(succeeded for _, succeeded, _ in outcome) else 2
 
+
+def update_definitions(out=sys.stdout):
+    """Run freshclam for the definitions Guardian scans with; its exit code is returned."""
+    import subprocess
+    from core import clamav
+    try:
+        return subprocess.run(clamav.freshclam_command(), stdout=out, stderr=subprocess.STDOUT).returncode
+    except OSError as exc:
+        out.write(f"Could not run freshclam: {exc}\n")
+        return 2
+

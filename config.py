@@ -9,7 +9,7 @@ DEFAULTS = {
     "scheduled_scan": False, "weekly_home_scan": False, "skip_unchanged": True, "download_notifications": True,
     "hash_lookup": True, "yara_scan": True, "yara_quarantine": False,
     "auto_update_lists": True, "skip_media": False, "max_scan_size_mb": 0, "removable_prompt": True,
-    "gentle_scheduled": True, "history_retention_days": 90,
+    "gentle_scheduled": True, "history_retention_days": 90, "check_updates": True,
     "scan_hour": -1, "quarantine_retention_days": 0, "theme": "system",
 }
 # Non-boolean settings accept only these values (-1 = any time, 0 = keep forever).

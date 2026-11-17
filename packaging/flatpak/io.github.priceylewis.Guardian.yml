@@ -1,0 +1,145 @@
+# Flatpak build of Guardian with its own ClamAV, YARA-X and Python dependencies.
+# Built and smoke-tested by .github/workflows/flatpak.yml; to build locally:
+#   flatpak-builder --user --install --force-clean build packaging/flatpak/io.github.priceylewis.Guardian.yml
+app-id: io.github.priceylewis.Guardian
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: guardian
+finish-args:
+  - --share=ipc
+  # Virus definitions, threat lists and VirusTotal lookups.
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Scanning and monitoring need to read the files they check.
+  - --filesystem=home
+  - --filesystem=/media
+  - --filesystem=/run/media
+  - --filesystem=/mnt
+  # "Start Guardian at login" writes a desktop entry here.
+  - --filesystem=xdg-config/autostart:create
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+cleanup:
+  - /include
+  - /lib/cmake
+  - /lib/pkgconfig
+  - /share/doc
+  - /share/man
+  - '*.a'
+  - '*.la'
+
+modules:
+  - name: json-c
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_STATIC_LIBS=OFF
+      - -DBUILD_TESTING=OFF
+      - -DDISABLE_EXTRA_LIBS=ON
+    sources:
+      - type: git
+        url: https://github.com/json-c/json-c.git
+        tag: json-c-0.18-20240915
+        commit: 41a55cfcedb54d9c1874f2f0eb07b504091d7e37
+
+  - name: clamav
+    buildsystem: cmake-ninja
+    build-options:
+      append-path: /usr/lib/sdk/rust-stable/bin
+      env:
+        # The release tarball carries every Rust crate it needs.
+        CARGO_NET_OFFLINE: 'true'
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DENABLE_TESTS=OFF
+      - -DENABLE_MILTER=OFF
+      - -DENABLE_CLAMONACC=OFF
+      - -DENABLE_SYSTEMD=OFF
+      - -DENABLE_MAN_PAGES=OFF
+      - -DENABLE_DOXYGEN=OFF
+      - -DENABLE_EXAMPLES=OFF
+      - -DENABLE_JSON_SHARED=ON
+      - -DAPP_CONFIG_DIRECTORY=/app/etc/clamav
+      # Guardian always names its own definitions folder; this default points inside the sandbox too.
+      - -DDATABASE_DIRECTORY=/var/data/clamav
+    cleanup:
+      - /bin/clamdtop
+      - /bin/clamconf
+      - /bin/sigtool
+      - /bin/clambc
+      - /bin/clamsubmit
+      - /sbin
+      # /etc/clamav/certs must stay: ClamAV verifies its definitions' signatures with it.
+      - /etc/clamav/*.sample
+    sources:
+      - type: archive
+        url: https://github.com/Cisco-Talos/clamav/releases/download/clamav-1.5.4/clamav-1.5.4.tar.gz
+        sha256: 1af1117a228f1b5bc7fa91a0dabc37848a99e7d25188e9be8043332ce721dfd3
+
+  # notify-send, which Guardian uses for notifications with a "Look up" button.
+  - name: libnotify
+    buildsystem: meson
+    config-opts:
+      - -Dtests=false
+      - -Dintrospection=disabled
+      - -Dman=false
+      - -Dgtk_doc=false
+      - -Ddocbook_docs=disabled
+    sources:
+      - type: git
+        url: https://gitlab.gnome.org/GNOME/libnotify.git
+        tag: 0.8.3
+        commit: 6083790f9e0f1827147ecd8799c4dced0e86a877
+
+  - name: python-dependencies
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --no-deps --prefix=/app --find-links=. shiboken6 PySide6-Essentials watchdog yara-x
+      # pyClamd is a single pure-Python package published only as source.
+      - tar --no-same-owner -xzf pyClamd-0.4.0.tar.gz
+      # pip above created the site-packages folder for the runtime's Python version.
+      - cp -r pyClamd-0.4.0/pyclamd /app/lib/python3*/site-packages/
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/49/c2/a04fa003b4360e99d8e3fc2829abacf37396ace63ea1cd616402209ec7c6/shiboken6-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
+        sha256: 3bde565bb0890044b5c7f63808adddede5abc241e9395a2bfed61919884d6240
+      - type: file
+        url: https://files.pythonhosted.org/packages/7b/3c/7597d8dcb36aa8315427635ec6ec9d850ffbad4ce78b9118ac854889f2d3/pyside6_essentials-6.12.0-cp310-abi3-manylinux_2_34_x86_64.whl
+        sha256: 16f4b5e41daf49235ae048458243da9efe5f3d8040f9cc5aa454ce69893d3bd9
+      - type: file
+        url: https://files.pythonhosted.org/packages/b5/e8/dbf020b4d98251a9860752a094d09a65e1b436ad181faf929983f697048f/watchdog-6.0.0-py3-none-manylinux2014_x86_64.whl
+        sha256: 20ffe5b202af80ab4266dcd3e91aae72bf2da48c0d33bdb15c66658e685e94e2
+      - type: file
+        url: https://files.pythonhosted.org/packages/15/2e/dced1bb146a66428c3ee00f9ee2e2614a2b023faed2933c2bc4c699a6a1b/yara_x-1.23.0-cp39-abi3-manylinux_2_28_x86_64.whl
+        sha256: fc2c0c4538b7d93f8d62c58f2e5a7890ed0ecac5fd465b776196cafc83c5c842
+      - type: file
+        url: https://files.pythonhosted.org/packages/13/73/97a0518b59f1b6aefa2ac851566038d2c9128f8a5503bcf4cd0adf8b0072/pyClamd-0.4.0.tar.gz
+        sha256: ddd588577e5db123760b6ddaac46b5c4b1d9044a00b5d9422de59f83a55c20fe
+
+  - name: guardian
+    buildsystem: simple
+    build-commands:
+      - install -d /app/share/guardian
+      - cp -r guardian.py config.py core database ui assets /app/share/guardian/
+      - install -Dm755 packaging/flatpak/guardian.sh /app/bin/guardian
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop -t /app/share/applications
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.metainfo.xml -t /app/share/metainfo
+      - for size in 64 128 256 512; do install -Dm644 packaging/flatpak/icons/$size.png /app/share/icons/hicolor/${size}x${size}/apps/${FLATPAK_ID}.png; done
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .flatpak-builder
+          - flatpak_app
+          - build
+          - dist
+          - repo
+          - tests
+          - web-demo
+          - docs

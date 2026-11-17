@@ -12,9 +12,9 @@ from ui.tray import GuardianTray
 from ui.theme import apply_theme, follow_system
 
 
-USAGE = """usage: guardian [--minimized]
+USAGE = """usage: guardian [--minimized] | --version
        guardian --scan [--report-only] [--full] PATH...
-       guardian --update-threat-lists
+       guardian --update-threat-lists | --update-definitions
        guardian --install-menu-entry | --remove-menu-entry"""
 
 
@@ -31,10 +31,21 @@ def main():
     if sys.argv[1:2] == ["--update-threat-lists"]:
         from core.cli import update_threat_lists
         return update_threat_lists()
+    if sys.argv[1:2] == ["--update-definitions"]:
+        from core.cli import update_definitions
+        return update_definitions()
     if sys.argv[1:2] in (["--install-menu-entry"], ["--remove-menu-entry"]):
         from core.startup import set_menu_entry
-        entry = set_menu_entry(sys.argv[1] == "--install-menu-entry")
+        try:
+            entry = set_menu_entry(sys.argv[1] == "--install-menu-entry")
+        except RuntimeError as exc:
+            print(exc)
+            return 0
         print(("Added " if sys.argv[1] == "--install-menu-entry" else "Removed ") + str(entry))
+        return 0
+    if sys.argv[1:2] == ["--version"]:
+        from core.version import VERSION
+        print("Guardian " + VERSION)
         return 0
     if sys.argv[1:2] in (["--help"], ["-h"]):
         print(USAGE)
@@ -47,7 +58,8 @@ def main():
     DATA.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(DATA / "guardian.lock"))
     lock.setStaleLockTime(0)
-    if not lock.tryLock(100):
+    # After an in-app update the old instance may still be closing.
+    if not lock.tryLock(15000 if "--restarted" in sys.argv[1:] else 100):
         QMessageBox.information(None, "Guardian Antivirus", "Guardian is already running. Open it from the system tray.")
         return 0
     log.info("Guardian started (data in %s)", DATA)

@@ -32,8 +32,15 @@ Guardian 1.2 is about speed and a second opinion. Scans are several times faster
 - Overview shows whether the ClamAV daemon is connected and what the second-opinion engines have loaded, and offers the commands to set the daemon up.
 - Settings reports and explains extra freshclam signature sources.
 
+### Easier to install
+- **One command:** `install.sh` sets up ClamAV, its update service and daemon from your distribution (apt, dnf, pacman or zypper), installs Guardian for your user with pipx, adds the menu entry and downloads the threat lists. `--uninstall` removes it again.
+- **Flatpak:** a self-contained bundle with its own ClamAV, which downloads and refreshes its own virus definitions. Built and smoke-tested in CI and attached to tagged releases.
+- `guardian --update-definitions` updates the definitions Guardian scans with.
+
 ### Housekeeping
 - Per-file scan history is kept for 90 days by default; choose 30 days, a year or forever under Settings.
+
+- Threat-list downloads are checked before they replace the installed lists: an error page in place of a hash list, a rule pack less than half the installed size, or rules that do not compile are refused. The empty file's fingerprint is never treated as malware.
 
 ## Fixes
 - A file with a line break in its name could be reported clean by the daemon, which answered about a different file. Such names are now passed by descriptor, and an answer about any other file is not believed.
@@ -47,7 +54,7 @@ Guardian 1.2 is about speed and a second opinion. Scans are several times faster
 - The second-opinion engines do nothing until threat lists are downloaded.
 
 ## Verification
-- 167 automated tests, also run with YARA-X absent and with ClamAV absent.
+- 184 automated tests, including 6 that run against real `clamscan` and `clamd` in CI, also run with YARA-X absent and with ClamAV absent.
 - Scans against a real ClamAV daemon and `clamscan`: hostile file names, an unprivileged user with unreadable files, 90,000 files, pause and resume, and the main window driven through scan, quarantine, cancel and daemon failure.
 - The YARA Forge core rules were downloaded for real and matched none of 11,818 ordinary system files.
 

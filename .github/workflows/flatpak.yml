@@ -1,0 +1,118 @@
+name: Flatpak
+
+on:
+  push:
+    branches: [main, 'claude/**']
+    tags: ['v*']
+    paths-ignore: ['web-demo/**', 'docs/**', '*.md']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      # bubblewrap needs this to run the app for the smoke test.
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the Flatpak
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: Guardian.flatpak
+          manifest-path: packaging/flatpak/io.github.priceylewis.Guardian.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: true
+
+      - name: Install the bundle and smoke-test it
+        run: |
+          set -eux
+          APP=io.github.priceylewis.Guardian
+          flatpak --user remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak --user install -y --noninteractive Guardian.flatpak
+          flatpak run $APP --help
+          flatpak run --command=clamscan $APP --version
+          flatpak run --command=notify-send $APP --version
+          flatpak run --command=python3 $APP -c "import PySide6.QtWidgets, yara_x, pyclamd, watchdog; print('imports ok')"
+          # A harmless sample and a signature for it, in the app's own definitions folder.
+          SAMPLE='Guardian flatpak test sample, harmless'
+          mkdir -p "$HOME/flatpak-scan" "$HOME/.var/app/$APP/data/guardian/clamav"
+          printf '%s\n' "$SAMPLE" > "$HOME/flatpak-scan/sample.bin"
+          printf 'just text\n' > "$HOME/flatpak-scan/clean.txt"
+          SUM=$(printf '%s\n' "$SAMPLE" | md5sum | cut -d' ' -f1)
+          printf '%s:%s:Guardian.Test.Sample\n' "$SUM" "$(printf '%s\n' "$SAMPLE" | wc -c)" > "$HOME/.var/app/$APP/data/guardian/clamav/test.hdb"
+          set +e
+          flatpak run $APP --scan --report-only "$HOME/flatpak-scan" > scan.log 2>&1
+          code=$?
+          set -e
+          cat scan.log
+          test "$code" -eq 1
+          grep -q "sample.bin: FOUND Guardian.Test.Sample" scan.log
+          grep -q "1 clean" scan.log
+          # The window and every page build without a display.
+          flatpak run --env=QT_QPA_PLATFORM=offscreen --command=python3 $APP -c "
+          import sys; sys.path.insert(0, '/app/share/guardian')
+          from PySide6.QtWidgets import QApplication
+          app = QApplication([])
+          from ui.main_window import MainWindow
+          window = MainWindow(); window.show(); app.processEvents()
+          print(window.stack.widget(0).protection.engine.text())
+          assert 'built into Guardian' in window.stack.widget(0).protection.engine.text()
+          window.shutdown(); print('window ok')"
+
+      - name: Check the update repository can be built and installed from
+        env:
+          PUBLISH: '0'
+          GITHUB_TOKEN: unused
+        run: sh packaging/flatpak/publish-repository.sh Guardian.flatpak
+
+  release:
+    # Tagging a version (git tag v1.2.0 && git push origin v1.2.0) publishes the bundle.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v5
+        with:
+          name: Guardian-x86_64
+      - name: Attach the bundle and installer to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --notes-file "RELEASE_NOTES_${GITHUB_REF_NAME}.md" 2>/dev/null || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" Guardian.flatpak install.sh --clobber
+
+  repository:
+    # Publishes an update repository on the project's GitHub Pages site, so
+    # installed copies update with 'flatpak update' or a software centre.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-24.08
+      options: --privileged
+    permissions:
+      contents: write
+    concurrency:
+      group: guardian-pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v5
+        with:
+          name: Guardian-x86_64
+      - name: Add the release to the repository
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          # Optional: an ASCII-armoured private key, so users' Flatpak can verify updates.
+          GPG_PRIVATE_KEY: ${{ secrets.FLATPAK_GPG_PRIVATE_KEY }}
+        run: sh packaging/flatpak/publish-repository.sh Guardian.flatpak
+

@@ -23,3 +23,36 @@ jobs:
           /tmp/guardian-install/bin/guardian --help
           echo clean > /tmp/guardian-sample.txt
           GUARDIAN_DATA_DIR=/tmp/guardian-smoke /tmp/guardian-install/bin/guardian --scan --report-only /tmp/guardian-sample.txt || test $? -eq 2
+  real-clamav:
+    # The unit tests simulate ClamAV; these run the real clamscan and clamd,
+    # where file-name and protocol bugs actually show up.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install ClamAV and Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clamav clamav-daemon libegl1 libopengl0
+          # Official definitions are not needed: the tests bring their own signature.
+          sudo systemctl stop clamav-freshclam clamav-daemon || true
+      - name: Start clamd with the test signature
+        run: |
+          python3 -c "import hashlib; s=b'Guardian real-engine test sample, harmless\n'; print(f'{hashlib.md5(s).hexdigest()}:{len(s)}:Guardian.Test.Sample')" | sudo tee /var/lib/clamav/guardian-test.hdb
+          sudo mkdir -p /var/run/clamav
+          sudo chown clamav:clamav /var/run/clamav
+          sudo clamd
+          for attempt in $(seq 1 60); do
+            test -S /var/run/clamav/clamd.ctl && break
+            sleep 1
+          done
+          test -S /var/run/clamav/clamd.ctl
+      - run: python -m pip install -r requirements.txt pytest
+      - name: Run the real-engine tests
+        run: python -m pytest -q -rs tests/test_real_clamav.py
+        env:
+          QT_QPA_PLATFORM: offscreen
+          GUARDIAN_REAL_CLAMAV: '1'
+          GUARDIAN_REAL_CLAMD: '1'

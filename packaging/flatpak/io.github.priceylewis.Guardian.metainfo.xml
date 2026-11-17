@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.priceylewis.Guardian</id>
+  <name>Guardian Antivirus</name>
+  <summary>Scan files and watch folders for malware</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.priceylewis">
+    <name>Lewis Price</name>
+  </developer>
+  <description>
+    <p>Guardian is a desktop virus scanner built on ClamAV. It scans files and folders, watches the folders you choose, and isolates threats in quarantine.</p>
+    <ul>
+      <li>Quick, home-folder and custom scans that skip files unchanged since they were last found clean</li>
+      <li>Real-time monitoring of chosen folders, with a notice when a new download has been checked</li>
+      <li>A second opinion from known-malware fingerprints and YARA-X rules</li>
+      <li>Key-free VirusTotal lookups that send only a file's fingerprint, never the file</li>
+      <li>Quarantine with restore, scheduled scans and USB drive scanning</li>
+    </ul>
+    <p>This package includes its own ClamAV and downloads virus definitions itself.</p>
+  </description>
+  <launchable type="desktop-id">io.github.priceylewis.Guardian.desktop</launchable>
+  <url type="homepage">https://github.com/PriceyLewis/Guardian-AntiVirus</url>
+  <url type="bugtracker">https://github.com/PriceyLewis/Guardian-AntiVirus/issues</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/PriceyLewis/Guardian-AntiVirus/main/docs/screenshots/guardian-overview.png</image>
+      <caption>The Overview page</caption>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>System</category>
+    <category>Security</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.2.0" date="2026-11-16">
+      <description>
+        <p>Faster scans that skip unchanged files, hash-lookup and YARA-X second opinions, VirusTotal lookups, a Suspicious status, pause and resume, and a Flatpak package.</p>
+      </description>
+    </release>
+  </releases>
+</component>

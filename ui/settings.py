@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit, QWidget, QF
 from config import load_config, DEFAULTS
 from threading import Thread
 import core.paths as paths
-from core import engines, onaccess, signatures, threatlists
+from core import clamav, engines, onaccess, signatures, threatlists
 from core.definitions import describe
 from core.paths import LOGS
 from database.database import GuardianDatabase
@@ -125,6 +125,7 @@ class SettingsPage(QWidget):
             ("Desktop", "Control how Guardian fits into your desktop.", [
                 ("notifications", "Show desktop notifications", "Receive a notification when a threat is quarantined. Requires a working desktop notification service."),
                 ("download_notifications", "Tell me when a download has been checked", "Show the result when real-time monitoring checks a new file in your Downloads folder, with a button to look it up on VirusTotal. Needs notifications and real-time monitoring."),
+                ("check_updates", "Tell me when a new version is available", "Guardian asks GitHub once a day whether a newer release exists, and offers to install it."),
                 ("startup", "Start Guardian at login", "Create a login entry for this installation and Python environment. Takes effect at your next desktop login."),
                 ("close_to_tray", "Keep running when the window closes", "Hide to the system tray when available. Otherwise closing the window exits Guardian."),
                 ("theme", "Appearance", "Follow your desktop's light or dark preference, or choose one.", [("Match system", "system"), ("Dark", "dark"), ("Light", "light")])])]:
@@ -268,7 +269,8 @@ class SettingsPage(QWidget):
         self.save_settings()
 
     def check_engine(self):
-        self.start_check("clamscan", ["--version"], "engine")
+        command = clamav.version_command()
+        self.start_check(command[0], command[1:], "engine")
 
     def check_onaccess(self):
         text, attention = onaccess.describe(onaccess.status())
@@ -347,7 +349,8 @@ class SettingsPage(QWidget):
 
     def update_definitions(self):
         # Downloads can take minutes on a slow connection.
-        self.start_check("freshclam", ["--stdout"], "update", timeout=5 * 60 * 1000)
+        command = clamav.freshclam_command()
+        self.start_check(command[0], command[1:], "update", timeout=5 * 60 * 1000)
 
     def test_notification(self):
         if load_config()["notifications"]:
@@ -406,6 +409,9 @@ class SettingsPage(QWidget):
         detail = next((line for line in lines if "ERROR" in line), lines[-1] if lines else "freshclam returned an error")
         # Drop freshclam's "ERROR: <timestamp> ->" log prefix.
         detail = re.sub(r"^ERROR:\s*(?:.*?->\s*)?", "", detail).rstrip(".") + "."
+        if clamav.private_database():
+            return ("Update failed: " + detail + " Check your internet connection. ClamAV's servers also limit how often "
+                    "one address may download, so wait an hour before trying again if this keeps happening.")
         # Packaged FreshClam usually runs as a service that owns its log and database.
         return ("Update failed: " + detail + " If your system runs the FreshClam service, it updates definitions automatically; "
                 "otherwise run 'sudo freshclam' in a terminal.")
