@@ -25,6 +25,7 @@
 #page-history td:nth-child(2)::before{content:"File"}
 #page-history td:nth-child(3)::before{content:"Result"}
 #page-history td:nth-child(4)::before{content:"Details"}
+#page-history td:nth-child(5)::before{content:"Action"}
 #page-quarantine td:nth-child(1)::before{content:"Date"}
 #page-quarantine td:nth-child(2)::before{content:"Original file"}
 #page-quarantine td:nth-child(3)::before{content:"Detection"}
@@ -79,3 +80,13 @@
 [data-theme=light] .toast{background:#ffffff;border-color:#c3ccd9;box-shadow:0 12px 30px #1b243333}
 [data-theme=light] .table-wrap,[data-theme=light] .card{border-color:#d8dee8}
 @media(max-width:850px){[data-theme=light] #page-history tr,[data-theme=light] #page-quarantine tr{background:#ffffff;border-color:#d8dee8}[data-theme=light] #page-history td,[data-theme=light] #page-quarantine td{border-color:#e1e6ee}}
+.visually-hidden{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.file-button{display:inline-flex;align-items:center;white-space:nowrap}
+.file-button:focus-within{outline:2px solid #60d6ae;outline-offset:2px}
+.result-suspicious{color:#edba73}.result-ignored{color:#9aaac1}
+#check-detections{margin-top:10px}
+.section-title-row .button-row{margin-top:0}
+code{background:#0e1520;border:1px solid #293548;border-radius:5px;padding:1px 5px;font-size:12px}
+[data-theme=light] code{background:#e9eef5;border-color:#d8dee8}
+.table-action a.btn{text-decoration:none;padding:6px 8px;font-size:12px}
+#lookup-result,#scan-summary,.current-file{overflow-wrap:anywhere}

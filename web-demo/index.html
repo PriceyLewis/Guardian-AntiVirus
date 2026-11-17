@@ -41,7 +41,7 @@
             <h1>Overview</h1>
             <p>Your scans, protection activity and quarantined files in one place.</p>
           </div>
-          <div class="native-chip">Native stack: PySide6 · ClamAV · SQLite</div>
+          <div class="native-chip">Guardian 1.2 · PySide6 · ClamAV · YARA-X · SQLite</div>
         </header>
 
         <section class="card protection-card">
@@ -51,6 +51,8 @@
             <h2 id="protection-status">Folder monitoring is running</h2>
             <p id="protection-detail">Real-Time Monitoring: Running · Browser demo uses safe simulated events.</p>
             <p id="definitions-line">ClamAV 1.5.4 · definitions 27800, updated today (simulated)</p>
+            <p id="engine-line">Scan engine: ClamAV daemon connected · fast scanning (simulated)</p>
+            <p id="second-line">Second opinion: 1,204,611 known-malware fingerprints · YARA-X rules loaded (simulated)</p>
             <p id="last-scan-line">No scans yet</p>
           </div>
           <div class="protection-actions">
@@ -71,7 +73,10 @@
               <h2>Start a scan</h2>
               <p>Choose the area you want to check. This demo scans a safe virtual filesystem; the native app also scans files dropped onto its window.</p>
             </div>
-            <button id="cancel-scan" class="btn secondary hidden">Cancel scan</button>
+            <div class="button-row">
+              <button id="pause-scan" class="btn secondary hidden">Pause scan</button>
+              <button id="cancel-scan" class="btn secondary hidden">Cancel scan</button>
+            </div>
           </div>
 
           <div class="scan-actions">
@@ -86,7 +91,19 @@
             <div class="progress-track" aria-label="Scan progress"><div id="progress-bar" class="progress-bar"></div></div>
             <p id="current-file" class="current-file">Scan results will appear here.</p>
             <div id="scan-summary" class="scan-summary hidden"></div>
+            <button id="check-detections" class="btn secondary hidden">Check detections on VirusTotal</button>
           </div>
+        </section>
+
+        <section class="card">
+          <h2>Second opinion</h2>
+          <p>Look a file or link up on VirusTotal, which shows what about 70 antivirus engines say. Opens in a new tab. A file is never uploaded: this page computes its SHA-256 fingerprint in your browser and sends only that.</p>
+          <div class="folder-add">
+            <input id="lookup-link" placeholder="Paste a link, e.g. example.com/download" aria-label="Link to look up">
+            <button id="lookup-link-button" class="btn secondary">Look up link</button>
+            <label class="btn secondary file-button">Look up a file…<input id="lookup-file" type="file" class="visually-hidden"></label>
+          </div>
+          <p id="lookup-result" class="muted"></p>
         </section>
 
         <section class="card">
@@ -100,14 +117,21 @@
         <section class="card architecture-card">
           <h2>What the native app does</h2>
           <div class="architecture-flow">
-            <span>PySide6 UI</span><b>→</b><span>Scan Manager</span><b>→</b><span>clamd / clamscan</span><b>→</b><span>Quarantine</span><b>→</b><span>SQLite History</span>
+            <span>PySide6 UI</span><b>→</b><span>Scan Manager</span><b>→</b><span>clamd / clamscan</span><b>→</b><span>Hash lists + YARA-X</span><b>→</b><span>Quarantine</span><b>→</b><span>SQLite History</span>
           </div>
           <p>This browser build mirrors Guardian's user journeys. It does not access your computer, scan local files or claim to provide browser-based malware protection.</p>
+        </section>
+
+        <section class="card">
+          <h2>Install the real app</h2>
+          <p>On Debian, Ubuntu, Fedora, Arch or openSUSE, one command installs ClamAV, its daemon and Guardian:</p>
+          <pre class="steps">curl -fsSL https://raw.githubusercontent.com/PriceyLewis/Guardian-AntiVirus/main/install.sh | sh</pre>
+          <p>Or download <strong>Guardian.flatpak</strong> from the <a href="https://github.com/PriceyLewis/Guardian-AntiVirus/releases" target="_blank" rel="noreferrer">releases page</a> and run <code>flatpak install --user Guardian.flatpak</code>. The Flatpak includes its own ClamAV.</p>
         </section>
       </section>
 
       <section id="page-history" class="page" data-page-panel="history">
-        <header class="page-heading"><div><p class="eyebrow">Audit trail</p><h1>Scan history</h1><p>Review demo file results. Errors mean a file was not successfully checked.</p></div></header>
+        <header class="page-heading"><div><p class="eyebrow">Audit trail</p><h1>Scan history</h1><p>Review demo file results. Errors mean a file was not successfully checked. Suspicious files matched a YARA rule only and were left in place: look them up, then move them to quarantine or ignore them.</p></div></header>
         <section class="card">
           <div class="toolbar">
             <input id="history-search" type="search" placeholder="Search file paths or threat names…" aria-label="Search history">
@@ -115,6 +139,7 @@
               <option value="">All results</option>
               <option value="clean">Clean</option>
               <option value="found">Detections</option>
+              <option value="suspicious">Suspicious</option>
               <option value="error">Errors</option>
             </select>
             <select id="history-period" aria-label="History period">
@@ -126,7 +151,7 @@
             <button id="export-history" class="btn secondary">Export CSV</button>
           </div>
           <div class="table-wrap">
-            <table><thead><tr><th>Time</th><th>File path</th><th>Result</th><th>Details</th></tr></thead><tbody id="history-body"></tbody></table>
+            <table><thead><tr><th>Time</th><th>File path</th><th>Result</th><th>Details</th><th>Action</th></tr></thead><tbody id="history-body"></tbody></table>
           </div>
           <p id="history-count" class="muted"></p>
         </section>
@@ -155,6 +180,16 @@
           <p>These switches mirror the native application's persisted settings.</p>
           <label class="setting-row"><span><strong>Monitor files in real time</strong><small>Simulate asynchronous detection for new demo files.</small></span><input type="checkbox" data-setting="realtime"></label>
           <label class="setting-row"><span><strong>Inspect archives</strong><small>Mirrors the ClamAV archive-policy preference.</small></span><input type="checkbox" data-setting="archives"></label>
+          <label class="setting-row"><span><strong>Skip files that have not changed</strong><small>Scans pass over files already found clean and unmodified since; everything is rechecked when definitions update.</small></span><input type="checkbox" data-setting="skip_unchanged"></label>
+          <label class="setting-row"><span><strong>Skip audio, video and image files in folder scans</strong><small>Files you pick yourself are always scanned.</small></span><input type="checkbox" data-setting="skip_media"></label>
+        </section>
+
+        <section class="card settings-card">
+          <h2>Extra detection engines</h2>
+          <p>A second opinion on files ClamAV finds clean, from free threat lists that update daily.</p>
+          <label class="setting-row"><span><strong>Check files against known-malware fingerprints</strong><small>An exact SHA-256 match is quarantined like any detection.</small></span><input type="checkbox" data-setting="hash_lookup"></label>
+          <label class="setting-row"><span><strong>Scan with YARA-X rules</strong><small>Community rules that recognise malware families and variants.</small></span><input type="checkbox" data-setting="yara_scan"></label>
+          <label class="setting-row"><span><strong>Isolate files matched only by YARA rules</strong><small>When off, such files are marked Suspicious in History and left in place.</small></span><input type="checkbox" data-setting="yara_quarantine"></label>
         </section>
 
         <section class="card settings-card">
@@ -163,11 +198,13 @@
           <label class="setting-row"><span><strong>Run a daily quick scan</strong><small>Start a quick scan once a day.</small></span><input type="checkbox" data-setting="scheduled_scan"></label>
           <label class="setting-row"><span><strong>Run a weekly home scan</strong><small>Check the whole home folder once a week.</small></span><input type="checkbox" data-setting="weekly_home_scan"></label>
           <label class="setting-row"><span><strong>Preferred time</strong><small>Missed slots run when Guardian next opens.</small></span><select data-choice="scan_hour" aria-label="Preferred scan time"><option value="-1">Any time</option><option value="9">09:00</option><option value="13">13:00</option><option value="18">18:00</option><option value="22">22:00</option></select></label>
+          <label class="setting-row"><span><strong>Run scheduled scans gently</strong><small>One worker at low processor and disk priority.</small></span><input type="checkbox" data-setting="gentle_scheduled"></label>
         </section>
 
         <section class="card settings-card">
-          <h2>Quarantine</h2>
+          <h2>Quarantine &amp; history</h2>
           <label class="setting-row"><span><strong>Automatically delete quarantined files</strong><small>Old quarantined files are permanently deleted at this age.</small></span><select data-choice="quarantine_retention_days" aria-label="Quarantine retention"><option value="0">Never</option><option value="30">After 30 days</option><option value="90">After 90 days</option></select></label>
+          <label class="setting-row"><span><strong>Keep scan history for</strong><small>Older per-file results are deleted.</small></span><select data-choice="history_retention_days" aria-label="History retention"><option value="0">Forever</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></label>
         </section>
 
         <section class="card settings-card">
