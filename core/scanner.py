@@ -2,6 +2,8 @@ import hashlib
 import os
 import queue
 import re
+import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -56,6 +58,29 @@ class GuardianScanner:
     socket = None
     # Set once the daemon could not open a file by path; descriptors are passed from then on.
     pass_fd = False
+    # Scheduled scans set this to keep to one worker at low CPU and disk priority.
+    background = False
+    suspended = False
+    running = ()
+
+    def pause(self):
+        """Hold clamscan where it is; the daemon path simply stops being fed."""
+        self.suspended = True
+        for process in list(self.running):
+            if process.poll() is None:
+                try:
+                    process.send_signal(signal.SIGSTOP)
+                except OSError:
+                    pass
+
+    def resume(self):
+        self.suspended = False
+        for process in list(self.running):
+            if process.poll() is None:
+                try:
+                    process.send_signal(signal.SIGCONT)
+                except OSError:
+                    pass
 
     def __init__(self):
         self._local = local()
@@ -190,7 +215,8 @@ class GuardianScanner:
         take = Lock()
         stop = Event()
         # Files taken but not yet yielded; bounds the work done ahead of a consumer that stops.
-        ahead = Semaphore(2 * DAEMON_WORKERS)
+        workers = 1 if self.background else DAEMON_WORKERS
+        ahead = Semaphore(2 * workers)
 
         def work():
             try:
@@ -212,7 +238,7 @@ class GuardianScanner:
             finally:
                 results.put(None)
 
-        threads = [Thread(target=work, name="guardian-daemon-scan", daemon=True) for _ in range(DAEMON_WORKERS)]
+        threads = [Thread(target=work, name="guardian-daemon-scan", daemon=True) for _ in range(workers)]
         for thread in threads:
             thread.start()
         try:
@@ -268,7 +294,14 @@ class GuardianScanner:
         if not pending:
             return
         names = list(pending)
-        count = cli_processes(len(names))
+        count = 1 if self.background else cli_processes(len(names))
+        # nice and ionice exist on virtually every distribution; without them the scan runs normally.
+        gentle = []
+        if self.background:
+            if shutil.which("nice"):
+                gentle += ["nice", "-n", "19"]
+            if shutil.which("ionice"):
+                gentle += ["ionice", "-c", "3"]
         lines = queue.Queue()
         runs = []
         try:
@@ -280,7 +313,7 @@ class GuardianScanner:
                 errors = tempfile.TemporaryFile()
                 try:
                     process = subprocess.Popen(
-                        ["clamscan", "--no-summary", "--stdout", "--scan-archive=" + ("yes" if archives else "no"),
+                        gentle + ["clamscan", "--no-summary", "--stdout", "--scan-archive=" + ("yes" if archives else "no"),
                          "--file-list=" + listing.name],
                         stdout=subprocess.PIPE, stderr=errors,
                     )
@@ -290,6 +323,7 @@ class GuardianScanner:
                     for name in share:
                         yield pending[name], {"status": "error", "virus": str(exc)}
                     continue
+                self.running = [*self.running, process]
                 runs.append({"process": process, "listing": listing, "errors": errors, "left": set(share), "share": share, "done": 0})
                 Thread(target=self._read_lines, args=(len(runs) - 1, process, lines), daemon=True).start()
             active = len(runs)
@@ -297,6 +331,8 @@ class GuardianScanner:
                 try:
                     index, line = lines.get(timeout=CLI_IDLE_TIMEOUT)
                 except queue.Empty:
+                    if self.suspended:
+                        continue
                     for run in runs:
                         run["process"].kill()
                         for name in sorted(run["left"]):
@@ -330,6 +366,7 @@ class GuardianScanner:
                     yield pending[name], {"status": "error", "virus": failure} if failure else {"status": "clean", "virus": None}
                 run["left"] = set()
         finally:
+            self.running = [process for process in self.running if all(process is not run["process"] for run in runs)]
             for run in runs:
                 if run["process"].poll() is None:
                     run["process"].kill()

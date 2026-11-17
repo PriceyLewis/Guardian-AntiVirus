@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.paths import DATABASE_DIR
@@ -64,6 +64,8 @@ class GuardianDatabase:
         )
         """)
         cursor.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
+        # Files the user has judged safe after a pattern-rule match, by content.
+        cursor.execute("CREATE TABLE IF NOT EXISTS ignored(sha256 TEXT PRIMARY KEY, path TEXT, added TEXT)")
 
         if "sha256" not in [row[1] for row in cursor.execute("PRAGMA table_info(scans)")]:
             cursor.execute("ALTER TABLE scans ADD COLUMN sha256 TEXT")
@@ -109,12 +111,47 @@ class GuardianDatabase:
 
     def detection_hash(self, filepath):
         """SHA-256 of the most recent detection at a path, from history or quarantine."""
-        for query in ("SELECT sha256 FROM scans WHERE filepath=? AND status='found' AND sha256 IS NOT NULL ORDER BY id DESC LIMIT 1",
+        for query in ("SELECT sha256 FROM scans WHERE filepath=? AND status IN ('found', 'suspicious', 'ignored') AND sha256 IS NOT NULL ORDER BY id DESC LIMIT 1",
                       "SELECT sha256 FROM quarantine WHERE original_path=? AND sha256 IS NOT NULL ORDER BY id DESC LIMIT 1"):
             row = self.conn.execute(query, (filepath,)).fetchone()
             if row:
                 return row[0]
         return None
+
+    def ignored_hashes(self):
+        return frozenset(row[0] for row in self.conn.execute("SELECT sha256 FROM ignored"))
+
+    def ignore_file(self, sha256, path):
+        """Stop reporting pattern-rule matches for a file with this content."""
+        self.conn.execute("INSERT OR REPLACE INTO ignored(sha256, path, added) VALUES (?, ?, ?)",
+                          (sha256, path, datetime.now().isoformat(timespec="seconds")))
+        self.conn.execute("UPDATE scans SET status='ignored' WHERE status='suspicious' AND sha256=?", (sha256,))
+        self.conn.commit()
+
+    def clear_ignored(self):
+        """Forget every ignored file. Remembered clean results go too, so those files are judged afresh."""
+        count = self.conn.execute("DELETE FROM ignored").rowcount
+        self.conn.execute("DELETE FROM clean_cache")
+        self.conn.commit()
+        return count
+
+    def mark_quarantined(self, filepath):
+        """A suspicious file the user chose to quarantine now counts as a detection."""
+        self.conn.execute("UPDATE scans SET status='found' WHERE status='suspicious' AND filepath=?", (filepath,))
+        self.conn.commit()
+
+    def get_suspicious_count(self):
+        return self.conn.execute("SELECT COUNT(DISTINCT filepath) FROM scans WHERE status='suspicious'").fetchone()[0]
+
+    def prune_scans(self, days):
+        """Delete per-file history older than days; returns the number of rows removed."""
+        if not days:
+            return 0
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+        removed = self.conn.execute("DELETE FROM scans WHERE timestamp < ?", (cutoff,)).rowcount
+        self.conn.execute("DELETE FROM scan_runs WHERE timestamp < ?", (cutoff,))
+        self.conn.commit()
+        return removed
 
     def cache_engine(self, key):
         """Start using the clean-file cache for an engine version, emptying it if that changed.

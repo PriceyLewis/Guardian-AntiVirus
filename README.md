@@ -5,11 +5,11 @@
 
 ## Portfolio release status
 
-**v1.1.0 · Tested 22 October 2026**
+**v1.2.0 · Tested 16 November 2026**
 
-Guardian 1.1 is installable with `pipx`, adds file and command-line scanning, monitored and excluded folders, quarantine fingerprints and clean-up, definitions status, guided on-access blocking, a light theme and keyboard shortcuts. The regression suite and the public demo journeys were re-run before publication.
+Guardian 1.2 scans several times faster, skips files that have not changed, and adds a second opinion on files ClamAV passes: known-malware fingerprints, YARA-X rules and key-free VirusTotal lookups. It also pauses and resumes scans, offers to scan USB drives, and runs scheduled scans gently. The regression suite was re-run before publication.
 
-[Read the v1.1.0 release notes](./RELEASE_NOTES_v1.1.0.md) · [v1.0.0 release notes](./RELEASE_NOTES_v1.0.0.md)
+[Read the v1.2.0 release notes](./RELEASE_NOTES_v1.2.0.md) · [v1.1.0](./RELEASE_NOTES_v1.1.0.md) · [v1.0.0](./RELEASE_NOTES_v1.0.0.md)
 
 [Launch the interactive demo](https://priceylewis.github.io/Guardian-AntiVirus/) · [View the recruiter case study](https://priceylewis.github.io/projects/guardian.html)
 
@@ -160,6 +160,9 @@ The implementation keeps scanning, monitoring, persistence, quarantine and notif
 - Excluded folders (Settings) are skipped by scans and monitoring.
 - **Second opinion from VirusTotal, without an API key:** *Check on VirusTotal* in Quarantine and History, *Check detections on VirusTotal* after a scan, and the *Second opinion* card on the Overview page open VirusTotal's report for a file or link in your browser. Files are never uploaded; only their SHA-256 fingerprint is sent.
 - **Second-opinion engines:** files ClamAV finds clean are also checked against known-malware SHA-256 lists (MalwareBazaar) and, if the optional `yara-x` package is installed, community YARA rules (YARA Forge core). Download both with *Update threat lists* in Settings or `guardian --update-threat-lists`; no account or key is needed, and your own `.txt` hash lists and `.yar` rules can be added to the same folder. A hash match is quarantined like any detection. A file matched only by YARA rules is reported and left in place unless you choose otherwise, because pattern rules misfire more often. Install the extra with `pip install "guardian-antivirus[yara]"`.
+- **Suspicious files:** a file matched only by YARA rules is marked Suspicious in History, where you can look it up, quarantine it or ignore it. The second-opinion engines also look inside zip and tar archives, and their lists refresh daily.
+- **Pause, gentle scheduled scans and skips:** pause and resume a running scan; scheduled scans use one worker at low priority; folder scans can optionally pass over media files and files above a chosen size.
+- **USB drives and history:** Guardian offers to scan a removable drive when it is plugged in, and trims per-file history after 90 days unless you choose otherwise.
 - **Unchanged files are skipped:** a file already found clean is not rescanned until it changes (size, modification time, change time or inode) or the engine, its signature files or the archive setting change. Turn this off under Settings → Protection, or pass `--full` to a command-line scan.
 - **Download notifications:** when real-time monitoring checks a new file in your Downloads folder it shows the result, with a *Look up on VirusTotal* button where the notification service supports actions.
 - **Daemon setup help:** when the ClamAV daemon is not running, the Overview page offers the exact commands to install and start it for Debian/Ubuntu, Fedora/RHEL or Arch.

@@ -19,7 +19,7 @@ def run_scan(args, out=sys.stdout, err=sys.stderr):
     QCoreApplication.instance() or QCoreApplication([])
     worker = ScanWorker(paths, "Command-line scan", quarantine=not report_only, skip_unchanged=False if full else None)
     summary = {}
-    labels = {"clean": "OK", "found": "FOUND", "error": "ERROR"}
+    labels = {"clean": "OK", "found": "FOUND", "suspicious": "SUSPICIOUS", "error": "ERROR"}
     reported = set()
 
     def result(path, status, detail):
@@ -40,13 +40,16 @@ def run_scan(args, out=sys.stdout, err=sys.stderr):
     except KeyboardInterrupt:
         worker.cancelled.set()
     action = "reported only" if report_only else f"{summary.get('quarantined', 0)} quarantined"
-    if summary.get("flagged") and not report_only:
-        action += f", {summary['flagged']} matched by YARA rules only and left in place"
+    if summary.get("flagged"):
+        action += f"), {summary['flagged']} suspicious (matched by YARA rules only, left in place"
     scanned = summary.get("scanned", 0)
     unchanged = f" ({summary['unchanged']} unchanged since last scan, not rechecked)" if summary.get("unchanged") else ""
     out.write(f"\nScanned {scanned} file{'' if scanned == 1 else 's'}: {summary.get('clean', 0)} clean{unchanged}, "
               f"{summary.get('found', 0)} found ({action}), {summary.get('errors', 0)} error{'' if summary.get('errors') == 1 else 's'}\n")
-    if summary.get("found"):
+    if summary.get("skipped"):
+        out.write(f"Skipped {summary['skipped']} large or media file{'' if summary['skipped'] == 1 else 's'}, as set in Settings.\n")
+    # Suspicious files need attention too.
+    if summary.get("found") or summary.get("flagged"):
         return 1
     return 2 if summary.get("errors") else 0
 

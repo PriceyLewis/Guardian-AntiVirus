@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta
 from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
 from PySide6.QtCore import QProcess, QTimer
-from PySide6.QtWidgets import QSystemTrayIcon
+from PySide6.QtWidgets import QMessageBox, QSystemTrayIcon
 from config import load_config
 from core.definitions import describe
+from core import threatlists
+from core.mounts import removable_mounts
 from core.quarantine import QuarantineManager
 from core.watcher import Watcher
 from PySide6.QtWidgets import (
@@ -24,6 +26,11 @@ from ui.history import HistoryPage
 from ui.quarantine import QuarantinePage
 from ui.settings import SettingsPage
 from ui.theme import apply_theme, resolve
+
+
+# Milliseconds: upkeep runs shortly after start-up, then hourly.
+HOUSEKEEPING_DELAY = 2 * 60 * 1000
+HOUSEKEEPING_INTERVAL = 60 * 60 * 1000
 
 
 def scan_due(run, days, hour, now):
@@ -63,6 +70,8 @@ class MainWindow(QMainWindow):
         self.allow_close = False
         self.tray_hint_shown = False
         self.paused_until = None
+        # Drives already attached at start-up are not offered for scanning.
+        self.known_mounts = removable_mounts()
         self.setAcceptDrops(True)
 
         self.setWindowTitle("Guardian Antivirus")
@@ -126,6 +135,7 @@ class MainWindow(QMainWindow):
             self.watcher_error = str(exc)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.refresh_protection)
+        self.timer.timeout.connect(self.check_removable)
         self.timer.start(3000)
         self.definitions_process = None
         self.definitions_timer = QTimer(self)
@@ -135,6 +145,10 @@ class MainWindow(QMainWindow):
         self.schedule_timer = QTimer(self)
         self.schedule_timer.timeout.connect(self.run_scheduled_scan)
         self.schedule_timer.start(60 * 1000)
+        self.housekeeping_timer = QTimer(self)
+        self.housekeeping_timer.timeout.connect(self.housekeeping)
+        self.housekeeping_timer.start(HOUSEKEEPING_INTERVAL)
+        QTimer.singleShot(HOUSEKEEPING_DELAY, self.housekeeping)
         self.sidebar.setCurrentRow(0)
 
         sidebar_layout = QVBoxLayout()
@@ -312,10 +326,43 @@ class MainWindow(QMainWindow):
         for enabled, name, days, start in ((settings["scheduled_scan"], None, 1, dashboard.quick_scan),
                                            (settings["weekly_home_scan"], "Home scan", 7, dashboard.full_scan)):
             if enabled and scan_due(dashboard.db.last_scan_run(name), days, hour, now):
-                start()
+                start(background=settings["gentle_scheduled"])
                 return
 
+    def housekeeping(self):
+        """Hourly upkeep: trim old history and refresh the threat lists when a day has passed."""
+        dashboard = self.stack.widget(0)
+        if dashboard.closing:
+            return
+        settings = load_config()
+        try:
+            if dashboard.db.prune_scans(settings["history_retention_days"]) and self.stack.currentIndex() == 3:
+                self.stack.widget(3).refresh()
+        except Exception:
+            pass  # A locked database is simply tried again next hour.
+        if settings["auto_update_lists"] and (settings["hash_lookup"] or settings["yara_scan"]) and threatlists.due():
+            self.stack.widget(5).update_threat_lists()
+
+    def check_removable(self):
+        mounts = removable_mounts()
+        new, self.known_mounts = mounts - self.known_mounts, mounts
+        dashboard = self.stack.widget(0)
+        if not new or dashboard.scan_active or dashboard.closing or not load_config()["removable_prompt"]:
+            return
+        for mount in sorted(new):
+            self.show()
+            self.raise_()
+            if self.ask_to_scan(mount):
+                self.sidebar.setCurrentRow(0)
+                dashboard.scan_paths([mount])
+                return
+
+    def ask_to_scan(self, mount):
+        return QMessageBox.question(self, "Removable drive connected", f"Scan {mount} for threats?",
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) == QMessageBox.StandardButton.Yes
+
     def shutdown(self):
+        self.housekeeping_timer.stop()
         self.timer.stop()
         self.definitions_timer.stop()
         self.schedule_timer.stop()
