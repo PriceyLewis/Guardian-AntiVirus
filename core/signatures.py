@@ -6,7 +6,7 @@ explains the steps rather than escalating privileges itself.
 """
 from pathlib import Path
 from core.onaccess import read_config
-from core.scanner import DATABASE_DIRS
+from core import clamav
 
 # Debian/Ubuntu, then Fedora/RHEL and Arch.
 FRESHCLAM_CONFIGS = ("/etc/clamav/freshclam.conf", "/etc/freshclam.conf")
@@ -17,7 +17,8 @@ SOURCES = (
 )
 
 
-def status(configs=FRESHCLAM_CONFIGS, folders=DATABASE_DIRS):
+def status(configs=FRESHCLAM_CONFIGS, folders=None):
+    folders = clamav.database_dirs() if folders is None else folders
     path, options = read_config(configs)
     urls = options.get("DatabaseCustomURL", [])
     installed = [name for name, url, _ in SOURCES

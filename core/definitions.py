@@ -21,12 +21,20 @@ def parse_version(output):
     return info
 
 
-def describe(output, now=None):
-    """Return (text, needs_attention) for the dashboard."""
+def describe(output, now=None, managed=None):
+    """Return (text, needs_attention) for the dashboard.
+
+    managed: Guardian keeps its own definitions (Flatpak), so advice names its own button.
+    """
+    if managed is None:
+        from core.clamav import private_database
+        managed = bool(private_database())
     info = parse_version(output)
     if not info["engine"].startswith("ClamAV"):
         return "ClamAV not found. Install ClamAV to enable scanning.", True
     if not info["version"]:
+        if managed:
+            return info["engine"] + " · no virus definitions yet. Guardian is downloading them; you can also choose Update definitions in Settings.", True
         return info["engine"] + " · no official signature database. Run freshclam to download definitions.", True
     if not info["updated"]:
         return f"{info['engine']} · definitions version {info['version']}", False
@@ -34,5 +42,7 @@ def describe(output, now=None):
     when = "today" if age < 1 else ("1 day ago" if age == 1 else f"{age} days ago")
     text = f"{info['engine']} · definitions {info['version']}, updated {when}"
     if age > STALE_DAYS:
+        if managed:
+            return text + ". Definitions are out of date; choose Update definitions in Settings and check your connection.", True
         return text + ". Definitions are out of date; check that FreshClam is running.", True
     return text, False

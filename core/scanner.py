@@ -12,11 +12,10 @@ from pathlib import Path
 from threading import Event, Lock, Semaphore, Thread, local
 import pyclamd
 from config import load_config
+from core import clamav
 
 # Debian/Ubuntu, Arch and Fedora/RHEL default clamd socket locations.
 CLAMD_SOCKETS = ("/var/run/clamav/clamd.ctl", "/run/clamav/clamd.ctl", "/run/clamd.scan/clamd.sock")
-# Where distributions keep signature databases; their contents are part of the engine's identity.
-DATABASE_DIRS = ("/var/lib/clamav",)
 CONTROL = re.compile(r"[\x00-\x1f]")
 DAEMON_TIMEOUT = 120
 # clamd scans on several threads (MaxThreads); keep a few of them busy.
@@ -34,6 +33,9 @@ CLI_IDLE_TIMEOUT = 900
 
 def daemon_socket(timeout=5):
     """Path of the first clamd socket that answers a ping, or None."""
+    # A daemon outside Guardian uses other definitions, and a sandbox cannot reach one anyway.
+    if clamav.private_database():
+        return None
     for path in CLAMD_SOCKETS:
         try:
             if pyclamd.ClamdUnixSocket(filename=path, timeout=timeout).ping():
@@ -45,6 +47,8 @@ def daemon_socket(timeout=5):
 
 def describe_engine(connected, archives):
     """Dashboard text saying which engine the next scan will use."""
+    if clamav.private_database():
+        return "Scan engine: ClamAV built into Guardian · definitions kept up to date by Guardian"
     if not connected:
         return "Scan engine: ClamAV daemon not found · scans use clamscan, which is slower. Start the clamav-daemon service for faster scans."
     if not archives:
@@ -98,12 +102,12 @@ class GuardianScanner:
             version = self.clamd.version().strip() if self.clamd and archives else ""
             # Daemons can be configured to refuse the version command; clamscan reads the same databases.
             if not version.startswith("ClamAV"):
-                version = subprocess.run(["clamscan", "--version"], capture_output=True, text=True, timeout=60).stdout.strip()
+                version = subprocess.run(clamav.version_command(), capture_output=True, text=True, timeout=60).stdout.strip()
             if not version.startswith("ClamAV"):
                 return None
             # Locally added signature files do not change the reported version.
             databases = []
-            for folder in DATABASE_DIRS:
+            for folder in clamav.database_dirs():
                 if os.path.isdir(folder):
                     with os.scandir(folder) as entries:
                         databases += sorted((e.name, e.stat().st_size, e.stat().st_mtime_ns) for e in entries if e.is_file())
@@ -123,7 +127,7 @@ class GuardianScanner:
                 return result
         try:
             result = subprocess.run(
-                ["clamscan", "--no-summary", "--scan-archive=" + ("yes" if archives else "no"), "--", str(filepath)],
+                ["clamscan", "--no-summary", *clamav.scan_args(), "--scan-archive=" + ("yes" if archives else "no"), "--", str(filepath)],
                 capture_output=True, encoding="utf-8", errors="surrogateescape", timeout=120,
             )
             if result.returncode == 0:
@@ -313,7 +317,7 @@ class GuardianScanner:
                 errors = tempfile.TemporaryFile()
                 try:
                     process = subprocess.Popen(
-                        gentle + ["clamscan", "--no-summary", "--stdout", "--scan-archive=" + ("yes" if archives else "no"),
+                        gentle + ["clamscan", "--no-summary", "--stdout", *clamav.scan_args(), "--scan-archive=" + ("yes" if archives else "no"),
                          "--file-list=" + listing.name],
                         stdout=subprocess.PIPE, stderr=errors,
                     )

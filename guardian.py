@@ -14,7 +14,7 @@ from ui.theme import apply_theme, follow_system
 
 USAGE = """usage: guardian [--minimized]
        guardian --scan [--report-only] [--full] PATH...
-       guardian --update-threat-lists
+       guardian --update-threat-lists | --update-definitions
        guardian --install-menu-entry | --remove-menu-entry"""
 
 
@@ -31,9 +31,16 @@ def main():
     if sys.argv[1:2] == ["--update-threat-lists"]:
         from core.cli import update_threat_lists
         return update_threat_lists()
+    if sys.argv[1:2] == ["--update-definitions"]:
+        from core.cli import update_definitions
+        return update_definitions()
     if sys.argv[1:2] in (["--install-menu-entry"], ["--remove-menu-entry"]):
         from core.startup import set_menu_entry
-        entry = set_menu_entry(sys.argv[1] == "--install-menu-entry")
+        try:
+            entry = set_menu_entry(sys.argv[1] == "--install-menu-entry")
+        except RuntimeError as exc:
+            print(exc)
+            return 0
         print(("Added " if sys.argv[1] == "--install-menu-entry" else "Removed ") + str(entry))
         return 0
     if sys.argv[1:2] in (["--help"], ["-h"]):

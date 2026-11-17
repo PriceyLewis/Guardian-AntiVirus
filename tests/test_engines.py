@@ -271,3 +271,42 @@ def test_cli_updates_threat_lists(threats,monkeypatch):
     assert out.getvalue()=='A: updated, 3 rules\nB: FAILED: offline\n'
     monkeypatch.setattr(threatlists,'update',lambda:[('A',True,'3 rules')])
     assert cli.update_threat_lists(io.StringIO())==0
+
+def test_downloads_that_are_not_what_they_claim_are_refused(threats):
+    pytest.importorskip('yara_x')
+    from core import threatlists
+    from core.engines import HashList
+    good=[hashlib.sha256(bytes([i])).hexdigest() for i in range(20)]
+    def bundle(text):
+        archive=io.BytesIO()
+        with zipfile.ZipFile(archive,'w') as zipped:zipped.writestr('packages/core/yara-rules-core.yar',text)
+        return archive.getvalue()
+    many=''.join(f'rule R{i} {{ strings: $a = "MARK{i}-XYZ" condition: $a }}\n' for i in range(10))
+    served={threatlists.BAZAAR_FULL:('\n'.join(good)+'\n').encode(),threatlists.FORGE_CORE:bundle(many)}
+    fetch=lambda url:served[url]
+    assert all(ok for _,ok,_ in threatlists.update(fetch))
+    rules=(threats.folder/'yara'/'yara-forge-core.yar').read_bytes()
+    # An HTML error page in place of the list, a truncated rule pack and rules that do not compile are all refused.
+    served[threatlists.BAZAAR_RECENT]=b'<html><body>\n<h1>Rate limit exceeded</h1>\n<p>Try later</p>\n'+good[0].encode()+b'\n</body></html>\n'
+    served[threatlists.FORGE_CORE]=bundle('rule R0 { strings: $a = "MARK0-XYZ" condition: $a }\n')
+    outcome=threatlists.update(fetch)
+    assert not outcome[0][1] and 'not a hash list' in outcome[0][2]
+    assert not outcome[1][1] and 'looks cut short' in outcome[1][2]
+    served[threatlists.FORGE_CORE]=bundle(many+'rule broken { condition: no_such_thing }\n')
+    outcome=threatlists.update(fetch)
+    assert not outcome[1][1] and 'do not compile' in outcome[1][2]
+    assert (threats.folder/'yara'/'yara-forge-core.yar').read_bytes()==rules and HashList().count==20
+    # A list with a few comments or blank lines is still accepted.
+    served[threatlists.BAZAAR_RECENT]=b'# MalwareBazaar recent\n\n'+hashlib.sha256(b'new').hexdigest().encode()+b'\n'
+    assert threatlists.update(fetch)[0][1]
+
+def test_the_empty_file_is_never_treated_as_malware(threats):
+    from core import threatlists
+    from core.engines import HashList, SecondOpinion
+    empty=hashlib.sha256(b'').hexdigest()
+    (threats.folder/'hashes'/'mine.txt').write_text(empty+'\n'+hashlib.sha256(b'bad').hexdigest()+'\n')
+    assert HashList().count==1
+    file=threats.folder.parent/'empty';file.write_bytes(b'')
+    assert SecondOpinion().check(file) is None
+    assert threatlists.digests((empty+'\n').encode())==set()
+

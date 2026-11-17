@@ -9,7 +9,7 @@ from core.scanner import daemon_socket, describe_engine
 from config import load_config
 from database.database import GuardianDatabase
 from ui.widgets import StatCard, ProtectionCard, RecentActivityCard
-from core import daemon, engines, virustotal
+from core import clamav, daemon, engines, virustotal
 from core.quarantine import sha256
 from ui.components import heading, card, label, button, open_in_browser, steps_dialog
 
@@ -123,7 +123,7 @@ class DashboardPage(QWidget):
             self.protection.second.setText(describe_second_opinion(engines.status(), self.db.get_suspicious_count()))
         connected = self.daemon_connected
         self.protection.engine.setText(describe_engine(connected, load_config()["archives"]))
-        self.daemon_button.setVisible(not connected)
+        self.daemon_button.setVisible(not connected and not clamav.private_database())
         run = self.db.last_scan_run()
         if run:
             timestamp, name, scanned, found, errors, cancelled, duration = run

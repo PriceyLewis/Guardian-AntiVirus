@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QPlainTextEdit, QWidget, QF
 from config import load_config, DEFAULTS
 from threading import Thread
 import core.paths as paths
-from core import engines, onaccess, signatures, threatlists
+from core import clamav, engines, onaccess, signatures, threatlists
 from core.definitions import describe
 from core.paths import LOGS
 from database.database import GuardianDatabase
@@ -268,7 +268,8 @@ class SettingsPage(QWidget):
         self.save_settings()
 
     def check_engine(self):
-        self.start_check("clamscan", ["--version"], "engine")
+        command = clamav.version_command()
+        self.start_check(command[0], command[1:], "engine")
 
     def check_onaccess(self):
         text, attention = onaccess.describe(onaccess.status())
@@ -347,7 +348,8 @@ class SettingsPage(QWidget):
 
     def update_definitions(self):
         # Downloads can take minutes on a slow connection.
-        self.start_check("freshclam", ["--stdout"], "update", timeout=5 * 60 * 1000)
+        command = clamav.freshclam_command()
+        self.start_check(command[0], command[1:], "update", timeout=5 * 60 * 1000)
 
     def test_notification(self):
         if load_config()["notifications"]:
@@ -406,6 +408,9 @@ class SettingsPage(QWidget):
         detail = next((line for line in lines if "ERROR" in line), lines[-1] if lines else "freshclam returned an error")
         # Drop freshclam's "ERROR: <timestamp> ->" log prefix.
         detail = re.sub(r"^ERROR:\s*(?:.*?->\s*)?", "", detail).rstrip(".") + "."
+        if clamav.private_database():
+            return ("Update failed: " + detail + " Check your internet connection. ClamAV's servers also limit how often "
+                    "one address may download, so wait an hour before trying again if this keeps happening.")
         # Packaged FreshClam usually runs as a service that owns its log and database.
         return ("Update failed: " + detail + " If your system runs the FreshClam service, it updates definitions automatically; "
                 "otherwise run 'sudo freshclam' in a terminal.")

@@ -38,6 +38,9 @@ IN_MEMORY_LIMIT = 32 * 1024 * 1024
 YARA_SIZE_LIMIT = 512 * 1024 * 1024
 YARA_TIMEOUT = 60
 HASH_NAME = "Guardian.KnownMalware.SHA256"
+# Fingerprints that must never count as malware, whatever a list says: a list that
+# named the empty file would have every empty file on the computer quarantined.
+NEVER_MALWARE = frozenset({bytes.fromhex("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")})
 # Archives are opened one level deep, within limits that a hostile archive cannot push past.
 ARCHIVE_MEMBERS = 200
 ARCHIVE_MEMBER_SIZE = 32 * 1024 * 1024
@@ -154,6 +157,7 @@ class HashList:
                             digests.add(bytes.fromhex(match.group(1).decode()))
             except OSError as exc:
                 log.warning("Could not read hash list %s: %s", source, exc)
+        digests -= NEVER_MALWARE
         _replace(store, lambda file: file.write(b"".join(sorted(digests))))
 
     def __contains__(self, digest):

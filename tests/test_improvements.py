@@ -86,7 +86,7 @@ def test_engine_key_tracks_version_archives_and_signature_files(isolated,monkeyp
     import config
     import core.scanner as engine_module
     signatures=isolated/'signatures';signatures.mkdir();(signatures/'daily.cvd').write_text('one')
-    monkeypatch.setattr(engine_module,'DATABASE_DIRS',(str(signatures),))
+    monkeypatch.setattr(engine_module.clamav,'database_dirs',lambda:(str(signatures),))
     version=['ClamAV 1.5.4/27500/Tue Oct 21 08:23:45 2026\n']
     monkeypatch.setattr('core.scanner.subprocess.run',lambda *a,**k:SimpleNamespace(stdout=version[0]))
     scanner=engine_module.GuardianScanner.__new__(engine_module.GuardianScanner);scanner.clamd=None

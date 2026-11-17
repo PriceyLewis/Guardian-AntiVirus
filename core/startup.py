@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 from core.paths import ROOT
+from core.clamav import flatpak_id
 
 ICON = ROOT / "assets" / "icons" / "Guardian.png"
 
@@ -21,9 +22,16 @@ def desktop_entry(*args):
         for char in ("\\", '"', "`", "$" ):
             value = value.replace(char, "\\" + char)
         return '"' + value + '"'
-    command = " ".join([quote(sys.executable), quote(ROOT / "guardian.py"), *args])
+    app = flatpak_id()
+    if app:
+        # Inside the sandbox sys.executable is a path the host cannot run.
+        command = " ".join(["flatpak", "run", quote(app), *args])
+        icon = app
+    else:
+        command = " ".join([quote(sys.executable), quote(ROOT / "guardian.py"), *args])
+        icon = str(ICON)
     return ("[Desktop Entry]\nType=Application\nName=Guardian Antivirus\nComment=Scan files and monitor folders with ClamAV\n"
-            "Exec=" + command + "\nIcon=" + str(ICON) + "\nCategories=System;Security;\nTerminal=false\n")
+            "Exec=" + command + "\nIcon=" + icon + "\nCategories=System;Security;\nTerminal=false\n")
 
 
 def set_startup(enabled):
@@ -37,6 +45,8 @@ def set_startup(enabled):
 
 def set_menu_entry(enabled):
     """Add or remove Guardian in the desktop's application menu."""
+    if flatpak_id():
+        raise RuntimeError("Flatpak already adds Guardian to the application menu.")
     entry = menu_entry_path()
     if not enabled:
         entry.unlink(missing_ok=True)
