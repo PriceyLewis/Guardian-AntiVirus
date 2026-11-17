@@ -98,7 +98,7 @@ modules:
     build-commands:
       - pip3 install --no-index --no-deps --prefix=/app --find-links=. shiboken6 PySide6-Essentials watchdog yara-x
       # pyClamd is a single pure-Python package published only as source.
-      - tar -xzf pyClamd-0.4.0.tar.gz
+      - tar --no-same-owner -xzf pyClamd-0.4.0.tar.gz
       # pip above created the site-packages folder for the runtime's Python version.
       - cp -r pyClamd-0.4.0/pyclamd /app/lib/python3*/site-packages/
     sources:
