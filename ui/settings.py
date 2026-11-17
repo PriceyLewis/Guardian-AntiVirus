@@ -125,6 +125,7 @@ class SettingsPage(QWidget):
             ("Desktop", "Control how Guardian fits into your desktop.", [
                 ("notifications", "Show desktop notifications", "Receive a notification when a threat is quarantined. Requires a working desktop notification service."),
                 ("download_notifications", "Tell me when a download has been checked", "Show the result when real-time monitoring checks a new file in your Downloads folder, with a button to look it up on VirusTotal. Needs notifications and real-time monitoring."),
+                ("check_updates", "Tell me when a new version is available", "Guardian asks GitHub once a day whether a newer release exists, and offers to install it."),
                 ("startup", "Start Guardian at login", "Create a login entry for this installation and Python environment. Takes effect at your next desktop login."),
                 ("close_to_tray", "Keep running when the window closes", "Hide to the system tray when available. Otherwise closing the window exits Guardian."),
                 ("theme", "Appearance", "Follow your desktop's light or dark preference, or choose one.", [("Match system", "system"), ("Dark", "dark"), ("Light", "light")])])]:

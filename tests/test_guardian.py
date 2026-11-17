@@ -18,7 +18,8 @@ def isolated(tmp_path, monkeypatch):
     for module in (quarantine, worker, watcher):
         monkeypatch.setattr(module, 'QUARANTINE', tmp_path / 'quarantine')
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
-    config.save_config(dict(config.DEFAULTS, realtime=False, notifications=False))
+    # Tests never ask GitHub about new releases.
+    config.save_config(dict(config.DEFAULTS, realtime=False, notifications=False, check_updates=False))
     return tmp_path
 
 def engine(scan):

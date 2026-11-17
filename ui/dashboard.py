@@ -1,15 +1,17 @@
 import time
 from datetime import datetime
 from threading import Thread
-from PySide6.QtCore import Qt, Signal, Slot
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QProgressBar, QFileDialog, QLineEdit
+from PySide6.QtCore import QProcess, Qt, Signal, Slot
+from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QProgressBar, QFileDialog, QLineEdit
 from core.scan_manager import ScanManager
 from core.notifier import GuardianNotifier
 from core.scanner import daemon_socket, describe_engine
 from config import load_config
 from database.database import GuardianDatabase
 from ui.widgets import StatCard, ProtectionCard, RecentActivityCard
-from core import clamav, daemon, engines, virustotal
+import sys
+import core.paths as paths
+from core import clamav, daemon, engines, updates, virustotal
 from core.quarantine import sha256
 from ui.components import heading, card, label, button, open_in_browser, steps_dialog
 
@@ -17,6 +19,8 @@ from ui.components import heading, card, label, button, open_in_browser, steps_d
 class DashboardPage(QWidget):
     # Path and SHA-256 (or empty text and an error) of a file fingerprinted for a lookup.
     fingerprinted = Signal(str, str, str)
+    # A newer release found by the daily check (a dict), from a background thread.
+    update_found = Signal(object)
 
     def __init__(self):
         super().__init__()
@@ -33,6 +37,25 @@ class DashboardPage(QWidget):
         layout.setContentsMargins(28, 26, 28, 26)
         layout.setSpacing(18)
         heading(layout, "Overview", "Your scans, protection activity and quarantined files in one place.")
+        frame, group = card()
+        self.update_card = frame
+        self.update_text = label("", "sectionTitle")
+        group.addWidget(self.update_text)
+        self.update_detail = label("")
+        group.addWidget(self.update_detail)
+        row = QHBoxLayout()
+        self.update_button = button("Update now", self.install_update, "primary")
+        self.restart_button = button("Restart Guardian", self.restart)
+        self.notes_button = button("What's new", self.open_release_notes)
+        for control in (self.update_button, self.restart_button, self.notes_button):
+            row.addWidget(control)
+        row.addStretch()
+        group.addLayout(row)
+        frame.hide()
+        self.release = None
+        self.update_process = None
+        self.update_found.connect(self.show_update)
+        layout.addWidget(frame)
         self.protection = ProtectionCard()
         self.daemon_button = button("Set up faster scanning…", self.show_daemon_steps)
         self.daemon_button.hide()
@@ -178,6 +201,78 @@ class DashboardPage(QWidget):
     def scan_paths(self, paths):
         """Scan any mix of files and folders, e.g. dropped onto the window."""
         self.start_scan(lambda **kwargs: self.scan_manager.scan_paths(paths, **kwargs), "Custom scan")
+
+    def check_for_updates(self, force=False):
+        """Ask GitHub about new releases in the background, at most once a day unless forced."""
+        if not force and (not load_config()["check_updates"] or not updates.due()):
+            return
+        def work():
+            release = updates.check()
+            if release and not self.closing:
+                self.update_found.emit(release)
+        self.update_thread = Thread(target=work, name="guardian-update-check", daemon=True)
+        self.update_thread.start()
+
+    @Slot(object)
+    def show_update(self, release):
+        self.release = release
+        kind = updates.install_kind()
+        self.update_text.setText(f"Guardian {release['version']} is available")
+        self.update_detail.setText(f"You have version {updates.VERSION}. "
+                                   + ("Updating keeps your settings, history and quarantine." if kind == "environment" else updates.how_to_update(kind)))
+        self.update_button.setVisible(kind == "environment")
+        self.update_button.setEnabled(True)
+        self.restart_button.hide()
+        self.update_card.show()
+
+    def install_update(self):
+        if not self.release or self.update_process is not None:
+            return
+        command = updates.update_command(self.release)
+        self.update_button.setEnabled(False)
+        self.update_detail.setText("Downloading and installing… this can take a minute.")
+        process = QProcess(self)
+        process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
+        process.finished.connect(self.update_finished)
+        process.errorOccurred.connect(self.update_error)
+        self.update_process = process
+        process.start(command[0], command[1:])
+
+    def update_finished(self, code, status):
+        if self.update_process is None:
+            return
+        output = bytes(self.update_process.readAllStandardOutput()).decode(errors="replace")
+        self.update_installed(code == 0 and status == QProcess.ExitStatus.NormalExit, output)
+
+    def update_error(self, error):
+        # finished is not emitted when the installer cannot start at all.
+        if error == QProcess.ProcessError.FailedToStart:
+            self.update_installed(False, "Could not start the installer.")
+
+    def update_installed(self, success, output):
+        if self.update_process is None:
+            return
+        self.update_process.deleteLater()
+        self.update_process = None
+        if success:
+            self.update_text.setText(f"Guardian {self.release['version']} is installed")
+            self.update_detail.setText("Restart Guardian to start using it.")
+            self.update_button.hide()
+            self.restart_button.show()
+        else:
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            self.update_detail.setText("The update failed: " + (lines[-1] if lines else "unknown error") + " " + updates.how_to_update("system"))
+            self.update_button.setEnabled(True)
+
+    def restart(self):
+        # The new instance waits for this one to release its lock.
+        QProcess.startDetached(sys.executable, [str(paths.ROOT / "guardian.py"), "--restarted"])
+        window = self.window()
+        window.allow_close = True
+        QApplication.instance().quit()
+
+    def open_release_notes(self):
+        open_in_browser(self.release["url"] if self.release else updates.RELEASES)
 
     def show_daemon_steps(self):
         self.steps_dialog = steps_dialog(self, "Set up the ClamAV daemon", daemon.setup_steps(daemon.family()))

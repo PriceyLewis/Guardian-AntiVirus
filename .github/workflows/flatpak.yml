@@ -47,9 +47,10 @@ jobs:
           SUM=$(printf '%s\n' "$SAMPLE" | md5sum | cut -d' ' -f1)
           printf '%s:%s:Guardian.Test.Sample\n' "$SUM" "$(printf '%s\n' "$SAMPLE" | wc -c)" > "$HOME/.var/app/$APP/data/guardian/clamav/test.hdb"
           set +e
-          flatpak run $APP --scan --report-only "$HOME/flatpak-scan" | tee scan.log
+          flatpak run $APP --scan --report-only "$HOME/flatpak-scan" > scan.log 2>&1
           code=$?
           set -e
+          cat scan.log
           test "$code" -eq 1
           grep -q "sample.bin: FOUND Guardian.Test.Sample" scan.log
           grep -q "1 clean" scan.log
@@ -80,5 +81,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --notes-file "RELEASE_NOTES_${GITHUB_REF_NAME}.0.md" 2>/dev/null || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --generate-notes
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --notes-file "RELEASE_NOTES_${GITHUB_REF_NAME}.md" 2>/dev/null || gh release create "$GITHUB_REF_NAME" --title "Guardian ${GITHUB_REF_NAME#v}" --generate-notes
           gh release upload "$GITHUB_REF_NAME" Guardian.flatpak install.sh --clobber

@@ -344,6 +344,7 @@ class MainWindow(QMainWindow):
             pass  # A locked database is simply tried again next hour.
         if settings["auto_update_lists"] and (settings["hash_lookup"] or settings["yara_scan"]) and threatlists.due():
             self.stack.widget(5).update_threat_lists()
+        dashboard.check_for_updates()
         # Inside a Flatpak no FreshClam service exists, so Guardian keeps its own definitions current.
         if clamav.definitions_due():
             self.stack.widget(5).update_definitions()

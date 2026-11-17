@@ -1,4 +1,5 @@
 import io
+import sys
 import os
 import time
 from pathlib import Path
@@ -100,3 +101,88 @@ def test_cli_updates_definitions(flatpak,monkeypatch):
     def missing(*a,**k):raise FileNotFoundError('freshclam')
     monkeypatch.setattr('subprocess.run',missing);out=io.StringIO()
     assert cli.update_definitions(out)==2 and 'Could not run freshclam' in out.getvalue()
+
+
+def release_json(tag,**extra):
+    import json
+    return json.dumps(dict(tag_name=tag,html_url='https://github.com/PriceyLewis/Guardian-AntiVirus/releases/tag/'+tag,draft=False,prerelease=False,**extra)).encode()
+
+def test_version_matches_the_package():
+    import re
+    from core.version import VERSION
+    toml=(Path(__file__).resolve().parents[1]/'pyproject.toml').read_text()
+    assert re.search(r'^version = "([^"]+)"',toml,re.M).group(1)==VERSION
+
+def test_release_check_compares_versions_and_survives_errors(isolated,monkeypatch):
+    import core.paths as paths
+    from core import updates
+    monkeypatch.setattr(paths,'DATA',isolated/'data')
+    assert updates.parse('v1.10.0')>updates.parse('1.9.3') and updates.parse('1.2')==(1,2,0) and updates.parse('nightly') is None
+    assert updates.due()
+    found=updates.check(lambda url:release_json('v9.0.0'))
+    assert found=={'version':'9.0.0','tag':'v9.0.0','url':'https://github.com/PriceyLewis/Guardian-AntiVirus/releases/tag/v9.0.0'}
+    assert not updates.due() and updates.due(time.time()+2*updates.CHECK_INTERVAL)
+    assert updates.check(lambda url:release_json('v'+updates.VERSION)) is None
+    assert updates.check(lambda url:release_json('v0.9.0')) is None
+    assert updates.check(lambda url:release_json('v9.0.0',prerelease=True)) is None
+    def offline(url):raise OSError('no network')
+    assert updates.check(offline) is None
+    assert updates.check(lambda url:b'<html>rate limited</html>') is None
+
+def test_install_kind_and_update_command(isolated,monkeypatch):
+    import sys
+    from core import updates
+    import core.paths as paths
+    monkeypatch.delenv('FLATPAK_ID',raising=False)
+    monkeypatch.setattr(paths,'ROOT',isolated)
+    monkeypatch.setattr(sys,'prefix',str(isolated));monkeypatch.setattr(sys,'base_prefix','/usr')
+    assert updates.install_kind()=='environment'
+    (isolated/'.git').mkdir();assert updates.install_kind()=='checkout'
+    monkeypatch.setenv('FLATPAK_ID','io.github.priceylewis.Guardian');assert updates.install_kind()=='flatpak'
+    assert 'flatpak update' in updates.how_to_update('flatpak') and updates.how_to_update('environment')==''
+    command=updates.update_command({'tag':'v9.0.0','version':'9.0.0'},with_yara=True)
+    assert command[:5]==[sys.executable,'-m','pip','install','--upgrade']
+    assert command[-1]=='guardian-antivirus[yara] @ https://github.com/PriceyLewis/Guardian-AntiVirus/archive/refs/tags/v9.0.0.tar.gz'
+    assert updates.update_command({'tag':'v9.0.0','version':'9.0.0'},with_yara=False)[-1].startswith('guardian-antivirus @ ')
+
+def test_dashboard_offers_and_installs_an_update(isolated,app,monkeypatch):
+    import ui.dashboard as dashboard
+    from core import updates
+    page=dashboard.DashboardPage()
+    release={'version':'9.0.0','tag':'v9.0.0','url':'https://example.invalid/notes'}
+    monkeypatch.setattr(updates,'install_kind',lambda:'environment')
+    assert page.update_card.isHidden()
+    page.show_update(release)
+    assert not page.update_card.isHidden() and page.update_text.text()=='Guardian 9.0.0 is available' and not page.update_button.isHidden()
+    started=[]
+    monkeypatch.setattr(updates,'update_command',lambda release:[sys.executable,'-c','print("installed")'])
+    page.install_update()
+    deadline=time.monotonic()+10
+    while page.update_process is not None and time.monotonic()<deadline:app.processEvents()
+    assert page.update_text.text()=='Guardian 9.0.0 is installed' and not page.restart_button.isHidden() and page.update_button.isHidden()
+    page.show_update(release)
+    monkeypatch.setattr(updates,'update_command',lambda release:[sys.executable,'-c','import sys; print("ERROR: no matching distribution"); sys.exit(1)'])
+    page.install_update()
+    deadline=time.monotonic()+10
+    while page.update_process is not None and time.monotonic()<deadline:app.processEvents()
+    assert 'The update failed: ERROR: no matching distribution' in page.update_detail.text() and page.update_button.isEnabled()
+    monkeypatch.setattr(updates,'install_kind',lambda:'flatpak');page.show_update(release)
+    assert page.update_button.isHidden() and 'flatpak update' in page.update_detail.text()
+    opened=[];monkeypatch.setattr(dashboard,'open_in_browser',opened.append);page.open_release_notes()
+    assert opened==['https://example.invalid/notes']
+    page.db.close()
+
+def test_update_check_respects_the_setting_and_runs_in_the_background(isolated,app,monkeypatch):
+    import config
+    import ui.dashboard as dashboard
+    from core import updates
+    page=dashboard.DashboardPage()
+    calls=[];monkeypatch.setattr(updates,'check',lambda:calls.append(1) or {'version':'9.0.0','tag':'v9.0.0','url':'u'})
+    monkeypatch.setattr(updates,'due',lambda:True);monkeypatch.setattr(updates,'install_kind',lambda:'environment')
+    page.check_for_updates();assert calls==[]
+    config.save_config(dict(config.load_config(),check_updates=True))
+    page.check_for_updates();page.update_thread.join()
+    deadline=time.monotonic()+5
+    while page.update_card.isHidden() and time.monotonic()<deadline:app.processEvents()
+    assert calls==[1] and not page.update_card.isHidden()
+    page.db.close()
