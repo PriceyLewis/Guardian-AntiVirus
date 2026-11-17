@@ -171,7 +171,7 @@ def test_theme_resolution_and_switching(isolated,app):
     window=MainWindow();settings=window.stack.widget(5)
     try:
         settings.theme.setCurrentIndex(settings.theme.findData('light'))
-        assert app.property('guardianTheme')=='light' and '#f4f6fa' in app.styleSheet()
+        assert app.property('guardianTheme')=='light' and 'QWidget { background: #ffffff; color: #000000;' in app.styleSheet()
     finally:
         window.shutdown();app.setStyleSheet('')
 

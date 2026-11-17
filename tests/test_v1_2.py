@@ -305,3 +305,15 @@ def test_settings_can_stop_ignoring_files(isolated,app):
     for key in ('skip_media','removable_prompt','gentle_scheduled','auto_update_lists'):assert hasattr(page,key)
     assert page.history_retention_days.currentData()==90 and page.max_scan_size_mb.currentData()==0
     page.shutdown()
+
+def test_themes_are_black_and_white_retro():
+    import re
+    from core.paths import ROOT
+    for name,paper,ink in (('dark','#000000','#ffffff'),('light','#ffffff','#000000')):
+        sheet=(ROOT/'assets'/'themes'/f'{name}.qss').read_text()
+        colours=set(re.findall(r'#[0-9a-fA-F]{6}\b',sheet))
+        greys={c for c in colours if c[1:3]==c[3:5]==c[5:7]}
+        assert colours==greys and {paper,ink}<=colours and len(colours)==3,(name,colours)
+        assert f'QWidget {{ background: {paper}; color: {ink};' in sheet and 'monospace' in sheet
+        assert 'border-radius: 0' in sheet and not re.search(r'border-radius: [1-9]',sheet)
+
